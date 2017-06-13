@@ -7,13 +7,12 @@ package bind
 import (
 	"bytes"
 	"fmt"
-	"go/constant"
 	"go/token"
 	"go/types"
 	"io"
-	"math"
 	"regexp"
-	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // TODO(crawshaw): disallow basic android java type names in exported symbols.
@@ -35,10 +34,9 @@ func (list ErrorList) Error() string {
 
 type javaGen struct {
 	*printer
-	fset    *token.FileSet
-	pkg     *types.Package
-	javaPkg string
-	err     ErrorList
+	fset *token.FileSet
+	pkg  *types.Package
+	err  ErrorList
 }
 
 func (g *javaGen) genStruct(obj *types.TypeName, T *types.Struct) {
@@ -255,14 +253,12 @@ const javaProxyPreamble = `static final class Proxy implements %s {
 func (g *javaGen) genInterface(o *types.TypeName) {
 	iface := o.Type().(*types.Named).Underlying().(*types.Interface)
 
-	summary := makeIfaceSummary(iface)
-
 	g.Printf("public interface %s extends go.Seq.Object {\n", o.Name())
 	g.Indent()
 
 	methodSigErr := false
-	for _, m := range summary.callable {
-		if err := g.funcSignature(m, false); err != nil {
+	for i := 0; i < iface.NumMethods(); i++ {
+		if err := g.funcSignature(iface.Method(i), false); err != nil {
 			methodSigErr = true
 			g.errorf("%v", err)
 		}
@@ -272,18 +268,16 @@ func (g *javaGen) genInterface(o *types.TypeName) {
 		return // skip stub generation, more of the same errors
 	}
 
-	if summary.implementable {
-		g.genInterfaceStub(o, iface)
-	}
+	g.genInterfaceStub(o, iface)
 
 	g.Printf(javaProxyPreamble, o.Name())
 	g.Indent()
 
-	for _, m := range summary.callable {
-		g.genFunc(m, true)
+	for i := 0; i < iface.NumMethods(); i++ {
+		g.genFunc(iface.Method(i), true)
 	}
-	for i, m := range summary.callable {
-		g.Printf("static final int CALL_%s = 0x%x0a;\n", m.Name(), i+1)
+	for i := 0; i < iface.NumMethods(); i++ {
+		g.Printf("static final int CALL_%s = 0x%x0a;\n", iface.Method(i).Name(), i+1)
 	}
 
 	g.Outdent()
@@ -291,6 +285,10 @@ func (g *javaGen) genInterface(o *types.TypeName) {
 
 	g.Outdent()
 	g.Printf("}\n\n")
+}
+
+func isErrorType(T types.Type) bool {
+	return T == types.Universe.Lookup("error").Type()
 }
 
 func isJavaPrimitive(T types.Type) bool {
@@ -308,16 +306,10 @@ func isJavaPrimitive(T types.Type) bool {
 
 // javaType returns a string that can be used as a Java type.
 func (g *javaGen) javaType(T types.Type) string {
-	if isErrorType(T) {
-		// The error type is usually translated into an exception in
-		// Java, however the type can be exposed in other ways, such
-		// as an exported field.
-		return "String"
-	}
 	switch T := T.(type) {
 	case *types.Basic:
 		switch T.Kind() {
-		case types.Bool, types.UntypedBool:
+		case types.Bool:
 			return "boolean"
 		case types.Int:
 			return "long"
@@ -325,23 +317,23 @@ func (g *javaGen) javaType(T types.Type) string {
 			return "byte"
 		case types.Int16:
 			return "short"
-		case types.Int32, types.UntypedRune: // types.Rune
+		case types.Int32:
 			return "int"
-		case types.Int64, types.UntypedInt:
+		case types.Int64:
 			return "long"
-		case types.Uint8: // types.Byte
+		case types.Uint8:
 			// TODO(crawshaw): Java bytes are signed, so this is
 			// questionable, but vital.
 			return "byte"
 		// TODO(crawshaw): case types.Uint, types.Uint16, types.Uint32, types.Uint64:
 		case types.Float32:
 			return "float"
-		case types.Float64, types.UntypedFloat:
+		case types.Float64:
 			return "double"
-		case types.String, types.UntypedString:
+		case types.String:
 			return "String"
 		default:
-			g.errorf("unsupported basic type: %s", T)
+			g.errorf("unsupported return type: %s", T)
 			return "TODO"
 		}
 	case *types.Slice:
@@ -352,15 +344,11 @@ func (g *javaGen) javaType(T types.Type) string {
 		if _, ok := T.Elem().(*types.Named); ok {
 			return g.javaType(T.Elem())
 		}
-		panic(fmt.Sprintf("unsupported pointer to type: %s", T))
+		panic(fmt.Sprintf("unsupporter pointer to type: %s", T))
 	case *types.Named:
 		n := T.Obj()
 		if n.Pkg() != g.pkg {
-			nPkgName := "<nilpkg>"
-			if nPkg := n.Pkg(); nPkg != nil {
-				nPkgName = nPkg.Name()
-			}
-			panic(fmt.Sprintf("type %s is in package %s, must be defined in package %s", n.Name(), nPkgName, g.pkg.Name()))
+			panic(fmt.Sprintf("type %s is in package %s, must be defined in package %s", n.Name(), n.Pkg().Name(), g.pkg.Name()))
 		}
 		// TODO(crawshaw): more checking here
 		return n.Name()
@@ -379,10 +367,8 @@ func (g *javaGen) javaTypeDefault(T types.Type) string {
 		case types.Bool:
 			return "false"
 		case types.Int, types.Int8, types.Int16, types.Int32,
-			types.Int64, types.Uint8:
+			types.Int64, types.Uint8, types.Float32, types.Float64:
 			return "0"
-		case types.Float32, types.Float64:
-			return "0.0"
 		case types.String:
 			return "null"
 		default:
@@ -459,35 +445,6 @@ func (g *javaGen) funcSignature(o *types.Func, static bool) error {
 	return nil
 }
 
-func (g *javaGen) genVar(o *types.Var) {
-	jType := g.javaType(o.Type())
-	varDesc := fmt.Sprintf("%s.%s", g.pkg.Name(), o.Name())
-
-	// setter
-	g.Printf("public static void set%s(%s v) {\n", o.Name(), jType)
-	g.Indent()
-	g.Printf("Seq in = new Seq();\n")
-	g.Printf("Seq out = new Seq();\n")
-	g.Printf("in.write%s;\n", seqWrite(o.Type(), "v"))
-	g.Printf("Seq.send(%q, 1, in, out);\n", varDesc)
-	g.Outdent()
-	g.Printf("}\n")
-	g.Printf("\n")
-
-	// getter
-	g.Printf("public static %s get%s() {\n", jType, o.Name())
-	g.Indent()
-	g.Printf("Seq in = new Seq();\n")
-	g.Printf("Seq out = new Seq();\n")
-	g.Printf("Seq.send(%q, 2, in, out);\n", varDesc)
-	g.Printf("%s ", jType)
-	g.genRead("v", "out", o.Type())
-	g.Printf("return v;\n")
-	g.Outdent()
-	g.Printf("}\n")
-	g.Printf("\n")
-}
-
 func (g *javaGen) genFunc(o *types.Func, method bool) {
 	if err := g.funcSignature(o, !method); err != nil {
 		g.errorf("%v", err)
@@ -530,7 +487,7 @@ func (g *javaGen) genFunc(o *types.Func, method bool) {
 	}
 	if returnsError {
 		g.Printf(`String _err = _out.readString();
-if (_err != null && !_err.isEmpty()) {
+if (_err != null) {
     throw new Exception(_err);
 }
 `)
@@ -551,7 +508,7 @@ func (g *javaGen) genRead(resName, seqName string, T types.Type) {
 		case *types.Named:
 			o := T.Obj()
 			if o.Pkg() != g.pkg {
-				g.errorf("type %s not defined in %s", T, g.pkg)
+				g.errorf("type %s not defined in package %s", T, g.pkg)
 				return
 			}
 			g.Printf("%s = new %s(%s.readRef());\n", resName, o.Name(), seqName)
@@ -563,7 +520,7 @@ func (g *javaGen) genRead(resName, seqName string, T types.Type) {
 		case *types.Interface, *types.Pointer:
 			o := T.Obj()
 			if o.Pkg() != g.pkg {
-				g.errorf("type %s not defined in %s", T, g.pkg)
+				g.errorf("type %s not defined in package %s", T, g.pkg)
 				return
 			}
 			g.Printf("%s = new %s.Proxy(%s.readRef());\n", resName, o.Name(), seqName)
@@ -579,110 +536,40 @@ func (g *javaGen) errorf(format string, args ...interface{}) {
 	g.err = append(g.err, fmt.Errorf(format, args...))
 }
 
-func (g *javaGen) gobindOpts() string {
-	opts := []string{"-lang=java"}
-	if g.javaPkg != javaPkgName(g.pkg.Name()) {
-		opts = append(opts, "-javapkg="+g.javaPkg)
-	}
-	return strings.Join(opts, " ")
-}
-
-const javaPreamble = `// Java class %[1]s.%[2]s is a proxy for talking to a Go program.
-//   gobind %[3]s %[4]s
+const javaPreamble = `// Java Package %s is a proxy for talking to a Go program.
+//   gobind -lang=java %s
 //
 // File is generated by gobind. Do not edit.
-package %[1]s;
+package go.%s;
 
 import go.Seq;
 
 `
 
-var javaNameReplacer = strings.NewReplacer(
-	"-", "_",
-	".", "_",
-)
-
-func javaPkgName(pkgName string) string {
-	s := javaNameReplacer.Replace(pkgName)
-	// Look for Java keywords that are not Go keywords, and avoid using
-	// them as a package name.
-	//
-	// This is not a problem for normal Go identifiers as we only expose
-	// exported symbols. The upper case first letter saves everything
-	// from accidentally matching except for the package name.
-	//
-	// Note that basic type names (like int) are not keywords in Go.
-	switch s {
-	case "abstract", "assert", "boolean", "byte", "catch", "char", "class",
-		"do", "double", "enum", "extends", "final", "finally", "float",
-		"implements", "instanceof", "int", "long", "native", "private",
-		"protected", "public", "short", "static", "strictfp", "super",
-		"synchronized", "this", "throw", "throws", "transient", "try",
-		"void", "volatile", "while":
-		s += "_"
-	}
-	return "go." + s
-}
-
-func (g *javaGen) className() string {
-	return strings.Title(javaNameReplacer.Replace(g.pkg.Name()))
-}
-
-func (g *javaGen) genConst(o *types.Const) {
-	// TODO(hyangah): should const names use upper cases + "_"?
-	// TODO(hyangah): check invalid names.
-	jType := g.javaType(o.Type())
-	val := o.Val().String()
-	switch b := o.Type().(*types.Basic); b.Kind() {
-	case types.Int64, types.UntypedInt:
-		i, exact := constant.Int64Val(o.Val())
-		if !exact {
-			g.errorf("const value %s for %s cannot be represented as %s", val, o.Name(), jType)
-			return
-		}
-		val = fmt.Sprintf("%dL", i)
-
-	case types.Float32:
-		f, _ := constant.Float32Val(o.Val())
-		val = fmt.Sprintf("%gf", f)
-
-	case types.Float64, types.UntypedFloat:
-		f, _ := constant.Float64Val(o.Val())
-		if math.IsInf(f, 0) || math.Abs(f) > math.MaxFloat64 {
-			g.errorf("const value %s for %s cannot be represented as %s", val, o.Name(), jType)
-			return
-		}
-		val = fmt.Sprintf("%g", f)
-	}
-	g.Printf("public static final %s %s = %s;\n", g.javaType(o.Type()), o.Name(), val)
-}
-
 func (g *javaGen) gen() error {
-	g.Printf(javaPreamble, g.javaPkg, g.className(), g.gobindOpts(), g.pkg.Path())
+	g.Printf(javaPreamble, g.pkg.Name(), g.pkg.Path(), g.pkg.Name())
 
-	g.Printf("public abstract class %s {\n", g.className())
+	firstRune, size := utf8.DecodeRuneInString(g.pkg.Name())
+	className := string(unicode.ToUpper(firstRune)) + g.pkg.Name()[size:]
+
+	g.Printf("public abstract class %s {\n", className)
 	g.Indent()
-	g.Printf("private %s() {} // uninstantiable\n\n", g.className())
-
-	var funcs []string
-
+	g.Printf("private %s() {} // uninstantiable\n\n", className)
 	scope := g.pkg.Scope()
 	names := scope.Names()
-	hasExported := false
+	var funcs []string
 	for _, name := range names {
 		obj := scope.Lookup(name)
 		if !obj.Exported() {
 			continue
 		}
-		hasExported = true
 
 		switch o := obj.(type) {
+		// TODO(crawshaw): case *types.Const:
 		// TODO(crawshaw): case *types.Var:
 		case *types.Func:
-			if isCallable(o) {
-				g.genFunc(o, false)
-				funcs = append(funcs, o.Name())
-			}
+			g.genFunc(o, false)
+			funcs = append(funcs, o.Name())
 		case *types.TypeName:
 			named := o.Type().(*types.Named)
 			switch t := named.Underlying().(type) {
@@ -694,16 +581,9 @@ func (g *javaGen) gen() error {
 				g.errorf("%s: cannot generate binding for %s: %T", g.fset.Position(o.Pos()), o.Name(), t)
 				continue
 			}
-		case *types.Const:
-			g.genConst(o)
-		case *types.Var:
-			g.genVar(o)
 		default:
-			g.errorf("unsupported exported type: %T", obj)
+			g.errorf("unsupported exported type: ", obj)
 		}
-	}
-	if !hasExported {
-		g.errorf("no exported names in the package %q", g.pkg.Path())
 	}
 
 	for i, name := range funcs {

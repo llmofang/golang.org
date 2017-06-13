@@ -58,6 +58,7 @@ After that come slides/sections, each after a blank line:
 	.code x.go /^func main/,/^}/
 	.play y.go
 	.image image.jpg
+	.background image.jpg
 	.iframe http://foo
 	.link http://foo label
 	.html file.html
@@ -177,6 +178,28 @@ preserves the aspect ratio of the image when scaling.
 
 	.image images/janet.jpg _ 300
 
+video:
+
+The template uses the function "video" to inject video files.
+
+The syntax is simple: 2 or 4 space-separated arguments.
+The first argument is always the file name.
+The second argument is always the file content-type.
+If there are more arguments, they are the height and width;
+both must be present, or substituted with an underscore.
+Replacing a dimension argument with the underscore parameter
+preserves the aspect ratio of the video when scaling.
+
+	.video videos/evangeline.mp4 video/mp4 400 600
+
+	.video videos/mabel.ogg video/ogg 500 _
+
+background:
+
+The template uses the function "background" to set the background image for
+a slide.  The only argument is the file name of the image.
+
+	.background images/susan.jpg
 
 caption:
 
@@ -200,6 +223,36 @@ that cannot be created using only the slide format.
 It is your responsibilty to make sure the included HTML is valid and safe.
 
 	.html file.html
+
+Presenter notes:
+
+Presenter notes may be enabled by appending the "-notes" flag when you run
+your "present" binary.
+
+This will allow you to open a second window by pressing 'N' from your browser
+displaying your slides. The second window is completely synced with your main
+window, except that presenter notes are only visible on the second window.
+
+Lines that begin with ": " are treated as presenter notes.
+
+	* Title of slide
+
+	Some Text
+
+	: Presenter notes (first paragraph)
+	: Presenter notes (subsequent paragraph(s))
+
+Notes may appear anywhere within the slide text. For example:
+
+	* Title of slide
+
+	: Presenter notes (first paragraph)
+
+	Some Text
+
+	: Presenter notes (subsequent paragraph(s))
+
+This has the same result as the example above.
 
 */
 package present // import "golang.org/x/tools/present"

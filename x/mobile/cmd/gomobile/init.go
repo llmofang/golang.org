@@ -76,19 +76,24 @@ func init() {
 }
 
 func runInit(cmd *command) error {
+	version, err := goVersion()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, version)
+	}
+
 	gopaths := filepath.SplitList(goEnv("GOPATH"))
 	if len(gopaths) == 0 {
 		return fmt.Errorf("GOPATH is not set")
 	}
 	gomobilepath = filepath.Join(gopaths[0], "pkg/gomobile")
-
-	verpath := filepath.Join(gomobilepath, "version")
+	ndkccpath = filepath.Join(gopaths[0], "pkg/gomobile/android-"+ndkVersion)
+	verpath := filepath.Join(gopaths[0], "pkg/gomobile/version")
 	if buildX || buildN {
 		fmt.Fprintln(xout, "GOMOBILE="+gomobilepath)
 	}
 	removeGomobilepkg()
 
-	if err := mkdir(ndk.Root()); err != nil {
+	if err := mkdir(ndkccpath); err != nil {
 		return err
 	}
 
@@ -112,10 +117,6 @@ func runInit(cmd *command) error {
 		removeAll(tmpdir)
 	}()
 
-	if err := envInit(); err != nil {
-		return err
-	}
-
 	if err := fetchNDK(); err != nil {
 		return err
 	}
@@ -123,35 +124,15 @@ func runInit(cmd *command) error {
 		return err
 	}
 
-	if runtime.GOOS == "darwin" {
-		// Install common x/mobile packages for local development.
-		// These are often slow to compile (due to cgo) and easy to forget.
-		//
-		// Limited to darwin for now as it is common for linux to
-		// not have GLES installed.
-		//
-		// TODO: consider testing GLES installation and suggesting it here
-		for _, pkg := range commonPkgs {
-			if err := installPkg(pkg, nil); err != nil {
-				return err
-			}
-		}
+	if err := envInit(); err != nil {
+		return err
 	}
 
 	// Install standard libraries for cross compilers.
 	start := time.Now()
-	var androidArgs []string
-	if goVersion == go1_6 {
-		// Ideally this would be -buildmode=c-shared.
-		// https://golang.org/issue/13234.
-		androidArgs = []string{"-gcflags=-shared", "-ldflags=-shared"}
+	if err := installStd(androidArmEnv); err != nil {
+		return err
 	}
-	for _, env := range androidEnv {
-		if err := installStd(env, androidArgs...); err != nil {
-			return err
-		}
-	}
-
 	if err := installDarwin(); err != nil {
 		return err
 	}
@@ -160,7 +141,7 @@ func runInit(cmd *command) error {
 		printcmd("go version > %s", verpath)
 	}
 	if !buildN {
-		if err := ioutil.WriteFile(verpath, goVersionOut, 0644); err != nil {
+		if err := ioutil.WriteFile(verpath, version, 0644); err != nil {
 			return err
 		}
 	}
@@ -169,12 +150,6 @@ func runInit(cmd *command) error {
 		fmt.Fprintf(os.Stderr, "\nDone, build took %s.\n", took)
 	}
 	return nil
-}
-
-var commonPkgs = []string{
-	"golang.org/x/mobile/gl",
-	"golang.org/x/mobile/app",
-	"golang.org/x/mobile/exp/app/debug",
 }
 
 func installDarwin() error {
@@ -195,25 +170,15 @@ func installDarwin() error {
 }
 
 func installStd(env []string, args ...string) error {
-	return installPkg("std", env, args...)
-}
-
-func installPkg(pkg string, env []string, args ...string) error {
-	tOS, tArch, pd := getenv(env, "GOOS"), getenv(env, "GOARCH"), pkgdir(env)
-	if tOS != "" && tArch != "" {
-		if buildV {
-			fmt.Fprintf(os.Stderr, "\n# Installing %s for %s/%s.\n", pkg, tOS, tArch)
-		}
-		args = append(args, "-pkgdir="+pd)
-	} else {
-		if buildV {
-			fmt.Fprintf(os.Stderr, "\n# Installing %s.\n", pkg)
-		}
+	tOS := getenv(env, "GOOS")
+	tArch := getenv(env, "GOARCH")
+	if buildV {
+		fmt.Fprintf(os.Stderr, "\n# Building standard library for %s/%s.\n", tOS, tArch)
 	}
 
 	// The -p flag is to speed up darwin/arm builds.
 	// Remove when golang.org/issue/10477 is resolved.
-	cmd := exec.Command("go", "install", fmt.Sprintf("-p=%d", runtime.NumCPU()))
+	cmd := exec.Command("go", "install", fmt.Sprintf("-p=%d", runtime.NumCPU()), "-pkgdir="+pkgdir(env))
 	cmd.Args = append(cmd.Args, args...)
 	if buildV {
 		cmd.Args = append(cmd.Args, "-v")
@@ -224,7 +189,7 @@ func installPkg(pkg string, env []string, args ...string) error {
 	if buildWork {
 		cmd.Args = append(cmd.Args, "-work")
 	}
-	cmd.Args = append(cmd.Args, pkg)
+	cmd.Args = append(cmd.Args, "std")
 	cmd.Env = append([]string{}, env...)
 	return runCmd(cmd)
 }
@@ -258,7 +223,7 @@ func move(dst, src string, names ...string) error {
 		}
 		if goos == "windows" {
 			// os.Rename fails if dstf already exists.
-			removeAll(dstf)
+			os.Remove(dstf)
 		}
 		if err := os.Rename(srcf, dstf); err != nil {
 			return err
@@ -300,6 +265,23 @@ func rm(name string) error {
 	return os.Remove(name)
 }
 
+func goVersion() ([]byte, error) {
+	gobin, err := exec.LookPath("go")
+	if err != nil {
+		return nil, fmt.Errorf(`no Go tool on $PATH`)
+	}
+	buildHelp, err := exec.Command(gobin, "help", "build").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("bad Go tool: %v (%s)", err, buildHelp)
+	}
+	// TODO(crawshaw): this is a crude test for Go 1.5. After release,
+	// remove this and check it is not an old release version.
+	if !bytes.Contains(buildHelp, []byte("-pkgdir")) {
+		return nil, fmt.Errorf("installed Go tool does not support -pkgdir")
+	}
+	return exec.Command(gobin, "version").CombinedOutput()
+}
+
 func fetchOpenAL() error {
 	url := "https://dl.google.com/go/mobile/gomobile-" + openALVersion + ".tar.gz"
 	archive, err := fetch(url)
@@ -309,25 +291,12 @@ func fetchOpenAL() error {
 	if err := extract("openal", archive); err != nil {
 		return err
 	}
-	if goos == "windows" {
-		resetReadOnlyFlagAll(filepath.Join(tmpdir, "openal"))
+	dst := filepath.Join(ndkccpath, "arm", "sysroot", "usr", "include")
+	src := filepath.Join(tmpdir, "openal", "include")
+	if err := move(dst, src, "AL"); err != nil {
+		return err
 	}
-	ndkroot := ndk.Root()
-	src := filepath.Join(tmpdir, "openal/include/AL")
-	for arch := range androidEnv {
-		toolchain := ndk.Toolchain(arch)
-		dst := filepath.Join(ndkroot, toolchain.arch+"/sysroot/usr/include/AL")
-		if buildX || buildN {
-			printcmd("cp -r %s %s", src, dst)
-		}
-		if buildN {
-			continue
-		}
-		if err := doCopyAll(dst, src); err != nil {
-			return err
-		}
-	}
-	libDst := filepath.Join(ndkroot, "openal")
+	libDst := filepath.Join(ndkccpath, "openal")
 	libSrc := filepath.Join(tmpdir, "openal")
 	if err := mkdir(libDst); err != nil {
 		return nil
@@ -397,47 +366,38 @@ func fetchNDK() error {
 			return err
 		}
 	}
-	if goos == "windows" {
-		resetReadOnlyFlagAll(filepath.Join(tmpdir, "android-"+ndkVersion))
+
+	dst := filepath.Join(ndkccpath, "arm")
+	dstSysroot := filepath.Join(dst, "sysroot/usr")
+	if err := mkdir(dstSysroot); err != nil {
+		return err
 	}
 
-	for arch := range androidEnv {
-		toolchain := ndk.Toolchain(arch)
-		dst := filepath.Join(ndk.Root(), toolchain.arch)
-		dstSysroot := filepath.Join(dst, "sysroot")
-		if err := mkdir(dstSysroot); err != nil {
-			return err
-		}
+	srcSysroot := filepath.Join(tmpdir, "android-"+ndkVersion+"/platforms/android-15/arch-arm/usr")
+	if err := move(dstSysroot, srcSysroot, "include", "lib"); err != nil {
+		return err
+	}
 
-		srcSysroot := filepath.Join(tmpdir, fmt.Sprintf(
-			"android-%s/platforms/%s/arch-%s", ndkVersion, toolchain.platform, toolchain.arch))
-		if err := move(dstSysroot, srcSysroot, "usr"); err != nil {
-			return err
-		}
+	ndkpath := filepath.Join(tmpdir, "android-"+ndkVersion+"/toolchains/arm-linux-androideabi-4.8/prebuilt")
+	if goos == "windows" && ndkarch == "x86" {
+		ndkpath = filepath.Join(ndkpath, "windows")
+	} else {
+		ndkpath = filepath.Join(ndkpath, goos+"-"+ndkarch)
+	}
+	if err := move(dst, ndkpath, "bin", "lib", "libexec"); err != nil {
+		return err
+	}
 
-		ndkpath := filepath.Join(tmpdir, fmt.Sprintf(
-			"android-%s/toolchains/%s/prebuilt", ndkVersion, toolchain.gcc))
-		if goos == "windows" && ndkarch == "x86" {
-			ndkpath = filepath.Join(ndkpath, "windows")
-		} else {
-			ndkpath = filepath.Join(ndkpath, goos+"-"+ndkarch)
+	linkpath := filepath.Join(dst, "arm-linux-androideabi/bin")
+	if err := mkdir(linkpath); err != nil {
+		return err
+	}
+	for _, name := range []string{"ld", "as", "gcc", "g++"} {
+		if goos == "windows" {
+			name += ".exe"
 		}
-		if err := move(dst, ndkpath, "bin", "lib", "libexec"); err != nil {
+		if err := symlink(filepath.Join(dst, "bin", "arm-linux-androideabi-"+name), filepath.Join(linkpath, name)); err != nil {
 			return err
-		}
-
-		linkpath := filepath.Join(dst, toolchain.toolPrefix+"/bin")
-		if err := mkdir(linkpath); err != nil {
-			return err
-		}
-
-		for _, name := range []string{"ld", "as", "gcc", "g++"} {
-			if goos == "windows" {
-				name += ".exe"
-			}
-			if err := symlink(filepath.Join(dst, "bin", toolchain.toolPrefix+"-"+name), filepath.Join(linkpath, name)); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

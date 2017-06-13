@@ -12,37 +12,32 @@ package sensor
 #include <stdlib.h>
 #include <android/sensor.h>
 
-void GoAndroid_createManager();
-void GoAndroid_destroyManager();
-int  GoAndroid_enableSensor(int, int32_t);
-void GoAndroid_disableSensor(int);
-int  GoAndroid_readQueue(int n, int32_t* types, int64_t* timestamps, float* vectors);
+#include "android.h"
 */
 import "C"
 import (
 	"fmt"
 	"runtime"
-	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
 
-var (
-	collectingMu sync.Mutex // guards collecting
+var nextLooperID int64 // each underlying ALooper should have a unique ID.
 
-	// collecting is true if sensor event collecting background
-	// job has already started.
-	collecting bool
-)
+// initSignal initializes an underlying looper and event queue.
+type initSignal struct{}
 
 // closeSignal destroys the underlying looper and event queue.
 type closeSignal struct{}
 
 // readSignal reads up to len(dst) events and mutates n with
-// the number of returned events.
+// the number of returned events. If error occurs during the read,
+// it mutates err.
 type readSignal struct {
 	dst []Event
 	n   *int
+	err *error
 }
 
 // enableSignal enables the sensors events on the underlying
@@ -65,50 +60,64 @@ type inOut struct {
 	out chan struct{}
 }
 
-var inout = make(chan inOut)
+// manager is the Android-specific implementation of Manager.
+type manager struct {
+	m     *C.GoAndroid_SensorManager
+	inout chan inOut
+}
 
-// init inits the manager and creates a goroutine to proxy the CGO calls.
+// initialize inits the manager and creates a goroutine to proxy the CGO calls.
 // All actions related to an ALooper needs to be performed from the same
 // OS thread. The goroutine proxy locks itself to an OS thread and handles the
 // CGO traffic on the same thread.
-func init() {
+func (m *manager) initialize() {
+	m.inout = make(chan inOut)
+
 	go func() {
 		runtime.LockOSThread()
-		C.GoAndroid_createManager()
-
 		for {
-			v := <-inout
+			v := <-m.inout
 			switch s := v.in.(type) {
-
+			case initSignal:
+				id := atomic.AddInt64(&nextLooperID, 1)
+				var mgr C.GoAndroid_SensorManager
+				C.GoAndroid_createManager(C.int(id), &mgr)
+				m.m = &mgr
 			case enableSignal:
 				usecsDelay := s.delay.Nanoseconds() / 1000
-				code := int(C.GoAndroid_enableSensor(typeToInt(s.t), C.int32_t(usecsDelay)))
+				code := int(C.GoAndroid_enableSensor(m.m.queue, typeToInt(s.t), C.int32_t(usecsDelay)))
 				if code != 0 {
 					*s.err = fmt.Errorf("sensor: no default %v sensor on the device", s.t)
 				}
 			case disableSignal:
-				C.GoAndroid_disableSensor(typeToInt(s.t))
+				C.GoAndroid_disableSensor(m.m.queue, typeToInt(s.t))
 			case readSignal:
-				n := readEvents(s.dst)
+				n, err := readEvents(m, s.dst)
 				*s.n = n
+				*s.err = err
 			case closeSignal:
-				C.GoAndroid_destroyManager()
+				C.GoAndroid_destroyManager(m.m)
 				close(v.out)
 				return // we don't need this goroutine anymore
 			}
 			close(v.out)
 		}
 	}()
+
+	if m.m == nil {
+		done := make(chan struct{})
+		m.inout <- inOut{
+			in:  initSignal{},
+			out: done,
+		}
+		<-done
+	}
 }
 
-// enable enables the sensor t on sender. A non-nil sender is
-// required before calling enable.
-func enable(t Type, delay time.Duration) error {
-	startCollecting()
-
+func (m *manager) enable(t Type, delay time.Duration) error {
 	var err error
 	done := make(chan struct{})
-	inout <- inOut{
+	m.inout <- inOut{
 		in:  enableSignal{t: t, delay: delay, err: &err},
 		out: done,
 	}
@@ -116,36 +125,9 @@ func enable(t Type, delay time.Duration) error {
 	return err
 }
 
-func startCollecting() {
-	collectingMu.Lock()
-	defer collectingMu.Unlock()
-
-	if collecting {
-		// already collecting.
-		return
-	}
-	collecting = true
-
-	go func() {
-		ev := make([]Event, 8)
-		var n int
-		for {
-			done := make(chan struct{})
-			inout <- inOut{
-				in:  readSignal{dst: ev, n: &n},
-				out: done,
-			}
-			<-done
-			for i := 0; i < n; i++ {
-				sender.Send(ev[i])
-			}
-		}
-	}()
-}
-
-func disable(t Type) error {
+func (m *manager) disable(t Type) error {
 	done := make(chan struct{})
-	inout <- inOut{
+	m.inout <- inOut{
 		in:  disableSignal{t: t},
 		out: done,
 	}
@@ -153,13 +135,24 @@ func disable(t Type) error {
 	return nil
 }
 
-func readEvents(e []Event) int {
+func (m *manager) read(e []Event) (n int, err error) {
+	done := make(chan struct{})
+	m.inout <- inOut{
+		in:  readSignal{dst: e, n: &n, err: &err},
+		out: done,
+	}
+	<-done
+	return
+}
+
+func readEvents(m *manager, e []Event) (n int, err error) {
 	num := len(e)
 	types := make([]C.int32_t, num)
 	timestamps := make([]C.int64_t, num)
 	vectors := make([]C.float, 3*num)
 
-	n := int(C.GoAndroid_readQueue(
+	n = int(C.GoAndroid_readQueue(
+		m.m.looperId, m.m.queue,
 		C.int(num),
 		(*C.int32_t)(unsafe.Pointer(&types[0])),
 		(*C.int64_t)(unsafe.Pointer(&timestamps[0])),
@@ -176,13 +169,12 @@ func readEvents(e []Event) int {
 			},
 		}
 	}
-	return n
+	return
 }
 
-// TODO(jbd): Remove destroy?
-func destroy() error {
+func (m *manager) close() error {
 	done := make(chan struct{})
-	inout <- inOut{
+	m.inout <- inOut{
 		in:  closeSignal{},
 		out: done,
 	}

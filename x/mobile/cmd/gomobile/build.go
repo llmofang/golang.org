@@ -65,13 +65,15 @@ func runBuild(cmd *command) (err error) {
 
 	args := cmd.flag.Args()
 
-	targetOS, targetArchs, err := parseBuildTarget(buildTarget)
-	if err != nil {
-		return fmt.Errorf(`invalid -target=%q: %v`, buildTarget, err)
+	ctx.GOARCH = "arm"
+	switch buildTarget {
+	case "android":
+		ctx.GOOS = "android"
+	case "ios":
+		ctx.GOOS = "darwin"
+	default:
+		return fmt.Errorf(`unknown -target, %q.`, buildTarget)
 	}
-
-	ctx.GOARCH = targetArchs[0]
-	ctx.GOOS = targetOS
 
 	switch len(args) {
 	case 0:
@@ -91,23 +93,16 @@ func runBuild(cmd *command) (err error) {
 	}
 
 	var nmpkgs map[string]bool
-	switch targetOS {
+	switch buildTarget {
 	case "android":
 		if pkg.Name != "main" {
-			for _, arch := range targetArchs {
-				env := androidEnv[arch]
-				if err := goBuild(pkg.ImportPath, env); err != nil {
-					return err
-				}
-			}
-			return nil
+			return goBuild(pkg.ImportPath, androidArmEnv)
 		}
-		nmpkgs, err = goAndroidBuild(pkg, targetArchs)
+		nmpkgs, err = goAndroidBuild(pkg)
 		if err != nil {
 			return err
 		}
-	case "darwin":
-		// TODO: use targetArchs?
+	case "ios":
 		if runtime.GOOS != "darwin" {
 			return fmt.Errorf("-target=ios requires darwin host")
 		}
@@ -253,19 +248,11 @@ func init() {
 }
 
 func goBuild(src string, env []string, args ...string) error {
-	return goCmd("build", []string{src}, env, args...)
-}
-
-func goInstall(srcs []string, env []string, args ...string) error {
-	return goCmd("install", srcs, env, args...)
-}
-
-func goCmd(subcmd string, srcs []string, env []string, args ...string) error {
 	// The -p flag is to speed up darwin/arm builds.
 	// Remove when golang.org/issue/10477 is resolved.
 	cmd := exec.Command(
 		"go",
-		subcmd,
+		"build",
 		fmt.Sprintf("-p=%d", runtime.NumCPU()),
 		"-pkgdir="+pkgdir(env),
 		"-tags="+strconv.Quote(strings.Join(ctx.BuildTags, ",")),
@@ -273,7 +260,7 @@ func goCmd(subcmd string, srcs []string, env []string, args ...string) error {
 	if buildV {
 		cmd.Args = append(cmd.Args, "-v")
 	}
-	if subcmd != "install" && buildI {
+	if buildI {
 		cmd.Args = append(cmd.Args, "-i")
 	}
 	if buildX {
@@ -289,80 +276,7 @@ func goCmd(subcmd string, srcs []string, env []string, args ...string) error {
 		cmd.Args = append(cmd.Args, "-work")
 	}
 	cmd.Args = append(cmd.Args, args...)
-	cmd.Args = append(cmd.Args, srcs...)
+	cmd.Args = append(cmd.Args, src)
 	cmd.Env = append([]string{}, env...)
 	return runCmd(cmd)
-}
-
-func parseBuildTarget(buildTarget string) (os string, archs []string, _ error) {
-	if buildTarget == "" {
-		return "", nil, fmt.Errorf(`invalid target ""`)
-	}
-
-	all := false
-	archNames := []string{}
-	for i, p := range strings.Split(buildTarget, ",") {
-		osarch := strings.SplitN(p, "/", 2) // len(osarch) > 0
-		if osarch[0] != "android" && osarch[0] != "ios" {
-			return "", nil, fmt.Errorf(`unsupported os`)
-		}
-
-		if i == 0 {
-			os = osarch[0]
-		}
-
-		if os != osarch[0] {
-			return "", nil, fmt.Errorf(`cannot target different OSes`)
-		}
-
-		if len(osarch) == 1 {
-			all = true
-		} else {
-			archNames = append(archNames, osarch[1])
-		}
-	}
-
-	// verify all archs are supported one while deduping.
-	var supported []string
-	switch os {
-	case "ios":
-		supported = []string{"arm", "arm64", "amd64"}
-	case "android":
-		for arch, tc := range ndk {
-			if tc.minGoVer <= goVersion {
-				supported = append(supported, arch)
-			}
-		}
-	}
-
-	isSupported := func(arch string) bool {
-		for _, a := range supported {
-			if a == arch {
-				return true
-			}
-		}
-		return false
-	}
-
-	seen := map[string]bool{}
-	for _, arch := range archNames {
-		if _, ok := seen[arch]; ok {
-			continue
-		}
-		if !isSupported(arch) {
-			return "", nil, fmt.Errorf(`unsupported arch: %q`, arch)
-		}
-
-		seen[arch] = true
-		archs = append(archs, arch)
-	}
-
-	targetOS := os
-	if os == "ios" {
-		targetOS = "darwin"
-	}
-	if all {
-		return targetOS, supported, nil
-	}
-	return targetOS, archs, nil
 }

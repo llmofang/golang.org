@@ -106,6 +106,10 @@ func (w *CodeWriter) WriteComment(comment string, args ...interface{}) {
 	w.printf("\n")
 }
 
+func (w *CodeWriter) writeSizeAndElementInfo(size, n int) {
+	w.printf("// Size: %d bytes, %d elements\n", size, n)
+}
+
 func (w *CodeWriter) writeSizeInfo(size int) {
 	w.printf("// Size: %d bytes\n", size)
 }
@@ -117,7 +121,14 @@ func (w *CodeWriter) WriteConst(name string, x interface{}) {
 
 	switch v.Type().Kind() {
 	case reflect.String:
-		w.printf("const %s %s = ", name, typeName(x))
+		w.writeSizeInfo(v.Len())
+		// See golang.org/issue/13145.
+		const arbitraryCutoff = 16
+		if v.Len() > arbitraryCutoff {
+			w.printf("var %s %s = ", name, typeName(x))
+		} else {
+			w.printf("const %s %s = ", name, typeName(x))
+		}
 		w.WriteString(v.String())
 		w.printf("\n")
 	default:
@@ -129,59 +140,35 @@ func (w *CodeWriter) WriteConst(name string, x interface{}) {
 func (w *CodeWriter) WriteVar(name string, x interface{}) {
 	w.insertSep()
 	v := reflect.ValueOf(x)
-	oldSize := w.Size
 	sz := int(v.Type().Size())
-	w.Size += sz
 
 	switch v.Type().Kind() {
 	case reflect.String:
+		w.writeSizeInfo(v.Len() + sz)
+		w.Size += sz
 		w.printf("var %s %s = ", name, typeName(x))
 		w.WriteString(v.String())
-	case reflect.Struct:
-		w.gob.Encode(x)
-		fallthrough
-	case reflect.Slice, reflect.Array:
+	case reflect.Slice:
+		w.writeSizeAndElementInfo(sizeOfArray(x)+sz, v.Len())
+		w.Size += sz
 		w.printf("var %s = ", name)
-		w.writeValue(v)
-		w.writeSizeInfo(w.Size - oldSize)
+		w.writeSlice(x, false, true)
+	case reflect.Array:
+		w.writeSizeAndElementInfo(sz, v.Len())
+		w.printf("var %s = ", name)
+		w.writeSlice(x, true, true)
 	default:
 		w.printf("var %s %s = ", name, typeName(x))
+		w.Size += sz
+		// TODO: size info?
 		w.gob.Encode(x)
-		w.writeValue(v)
-		w.writeSizeInfo(w.Size - oldSize)
+		w.printf("%#v", x)
 	}
 	w.printf("\n")
 }
 
-func (w *CodeWriter) writeValue(v reflect.Value) {
-	x := v.Interface()
-	switch v.Kind() {
-	case reflect.String:
-		w.WriteString(v.String())
-	case reflect.Array:
-		// Don't double count: callers of WriteArray count on the size being
-		// added, so we need to discount it here.
-		w.Size -= int(v.Type().Size())
-		w.writeSlice(x, true)
-	case reflect.Slice:
-		w.writeSlice(x, false)
-	case reflect.Struct:
-		w.printf("%s{\n", typeName(v.Interface()))
-		t := v.Type()
-		for i := 0; i < v.NumField(); i++ {
-			w.printf("%s: ", t.Field(i).Name)
-			w.writeValue(v.Field(i))
-			w.printf(",\n")
-		}
-		w.printf("}")
-	default:
-		w.printf("%#v", x)
-	}
-}
-
 // WriteString writes a string literal.
 func (w *CodeWriter) WriteString(s string) {
-	s = strings.Replace(s, `\`, `\\`, -1)
 	io.WriteString(w.Hash, s) // content hash
 	w.Size += len(s)
 
@@ -197,32 +184,21 @@ func (w *CodeWriter) WriteString(s string) {
 	// When starting on its own line, go fmt indents line 2+ an extra level.
 	n, max := maxWidth, maxWidth-4
 
-	// As per https://golang.org/issue/18078, the compiler has trouble
-	// compiling the concatenation of many strings, s0 + s1 + s2 + ... + sN,
-	// for large N. We insert redundant, explicit parentheses to work around
-	// that, lowering the N at any given step: (s0 + s1 + ... + s63) + (s64 +
-	// ... + s127) + etc + (etc + ... + sN).
-	explicitParens, extraComment := len(s) > 128*1024, ""
-	if explicitParens {
-		w.printf(`(`)
-		extraComment = "; the redundant, explicit parens are for https://golang.org/issue/18078"
-	}
-
 	// Print "" +\n, if a string does not start on its own line.
 	b := w.buf.Bytes()
 	if p := len(bytes.TrimRight(b, " \t")); p > 0 && b[p-1] != '\n' {
-		w.printf("\"\" + // Size: %d bytes%s\n", len(s), extraComment)
+		w.printf("\"\" +\n")
 		n, max = maxWidth, maxWidth
 	}
 
 	w.printf(`"`)
 
-	for sz, p, nLines := 0, 0, 0; p < len(s); {
+	for sz, p := 0, 0; p < len(s); {
 		var r rune
 		r, sz = utf8.DecodeRuneInString(s[p:])
 		out := s[p : p+sz]
 		chars := 1
-		if !unicode.IsPrint(r) || r == utf8.RuneError || r == '"' {
+		if !unicode.IsPrint(r) || r == utf8.RuneError {
 			switch sz {
 			case 1:
 				out = fmt.Sprintf("\\x%02x", s[p])
@@ -234,10 +210,6 @@ func (w *CodeWriter) WriteString(s string) {
 			chars = len(out)
 		}
 		if n -= chars; n < 0 {
-			nLines++
-			if explicitParens && nLines&63 == 63 {
-				w.printf("\") + (\"")
-			}
 			w.printf("\" +\n\"")
 			n = max - len(out)
 		}
@@ -245,30 +217,28 @@ func (w *CodeWriter) WriteString(s string) {
 		p += sz
 	}
 	w.printf(`"`)
-	if explicitParens {
-		w.printf(`)`)
-	}
 }
 
 // WriteSlice writes a slice value.
 func (w *CodeWriter) WriteSlice(x interface{}) {
-	w.writeSlice(x, false)
+	w.writeSlice(x, false, false)
 }
 
 // WriteArray writes an array value.
 func (w *CodeWriter) WriteArray(x interface{}) {
-	w.writeSlice(x, true)
+	w.writeSlice(x, true, false)
 }
 
-func (w *CodeWriter) writeSlice(x interface{}, isArray bool) {
+func (w *CodeWriter) writeSlice(x interface{}, isArray, isVar bool) {
 	v := reflect.ValueOf(x)
 	w.gob.Encode(v.Len())
 	w.Size += v.Len() * int(v.Type().Elem().Size())
+
 	name := typeName(x)
 	if isArray {
 		name = fmt.Sprintf("[%d]%s", v.Len(), name[strings.Index(name, "]")+1:])
 	}
-	if isArray {
+	if isArray || isVar {
 		w.printf("%s{\n", name)
 	} else {
 		w.printf("%s{ // %d elements\n", name, v.Len())
@@ -311,25 +281,36 @@ func (w *CodeWriter) writeSlice(x interface{}, isArray bool) {
 		}
 		w.printf("\n")
 	case reflect.Struct:
-		zero := reflect.Zero(v.Type().Elem()).Interface()
 		for i := 0; i < v.Len(); i++ {
 			x := v.Index(i).Interface()
 			w.gob.EncodeValue(v)
-			if !reflect.DeepEqual(zero, x) {
-				line := fmt.Sprintf("%#v,\n", x)
-				line = line[strings.IndexByte(line, '{'):]
-				w.printf("%d: ", i)
-				w.printf(line)
-			}
-		}
-	case reflect.Array:
-		for i := 0; i < v.Len(); i++ {
-			w.printf("%d: %#v,\n", i, v.Index(i).Interface())
+			line := fmt.Sprintf("%#v,\n", x)
+			line = line[strings.IndexByte(line, '{'):]
+			w.printf(line)
 		}
 	default:
-		panic("gen: slice elem type not supported")
+		panic("gen: slice type not supported")
 	}
 	w.printf("}")
+}
+
+func sizeOfArray(x interface{}) int {
+	v := reflect.ValueOf(x)
+
+	size := v.Len() * int(v.Type().Elem().Size())
+	switch v.Type().Elem().Kind() {
+	case reflect.String:
+		for _, s := range x.([]string) {
+			size += len(s)
+		}
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			size += sizeOfArray(v.Index(i).Interface())
+		}
+	case reflect.Array, reflect.Ptr, reflect.Map:
+		panic("gen: array element not supported.")
+	}
+	return size
 }
 
 // WriteType writes a definition of the type of the given value and returns the

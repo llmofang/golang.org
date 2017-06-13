@@ -9,13 +9,10 @@
 package importgraph_test
 
 import (
-	"fmt"
 	"go/build"
 	"sort"
-	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/refactor/importgraph"
 
 	_ "crypto/hmac" // just for test, below
@@ -45,14 +42,6 @@ func TestBuild(t *testing.T) {
 		}
 		if reverse[p][this] {
 			t.Errorf("unexpected: reverse[%s][importgraph] found", p)
-		}
-	}
-
-	// Test vendor packages appear under their absolute names.
-	if buildutil.AllowVendor != 0 { // hack: Go 1.6+ only
-		if !forward["net/http"]["vendor/golang.org/x/net/http2/hpack"] {
-			t.Errorf("forward[net/http] does not include vendor/golang.org/x/net/http2/hpack: %v",
-				strings.Replace(fmt.Sprint(forward["net/http"]), ":true", "", -1))
 		}
 	}
 

@@ -21,9 +21,8 @@ import (
 	"strings"
 )
 
-func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool, error) {
-	appName := path.Base(pkg.ImportPath)
-	libName := androidPkgName(appName)
+func goAndroidBuild(pkg *build.Package) (map[string]bool, error) {
+	libName := path.Base(pkg.ImportPath)
 	manifestPath := filepath.Join(pkg.Dir, "AndroidManifest.xml")
 	manifestData, err := ioutil.ReadFile(manifestPath)
 	if err != nil {
@@ -31,12 +30,17 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 			return nil, err
 		}
 
+		productName := rfc1034Label(libName)
+		if productName == "" {
+			productName = "ProductName" // like xcode.
+		}
+
 		buf := new(bytes.Buffer)
 		buf.WriteString(`<?xml version="1.0" encoding="utf-8"?>`)
 		err := manifestTmpl.Execute(buf, manifestTmplData{
 			// TODO(crawshaw): a better package path.
-			JavaPkgPath: "org.golang.todo." + libName,
-			Name:        strings.Title(appName),
+			JavaPkgPath: "org.golang.todo." + productName,
+			Name:        libName,
 			LibName:     libName,
 		})
 		if err != nil {
@@ -52,32 +56,21 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 			return nil, fmt.Errorf("error parsing %s: %v", manifestPath, err)
 		}
 	}
+	libPath := filepath.Join(tmpdir, "lib"+libName+".so")
 
-	libFiles := []string{}
-	nmpkgs := make(map[string]map[string]bool) // map: arch -> extractPkgs' output
+	err = goBuild(
+		pkg.ImportPath,
+		androidArmEnv,
+		"-buildmode=c-shared",
+		"-o", libPath,
+	)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, arch := range androidArchs {
-		env := androidEnv[arch]
-		toolchain := ndk.Toolchain(arch)
-		libPath := "lib/" + toolchain.abi + "/lib" + libName + ".so"
-		libAbsPath := filepath.Join(tmpdir, libPath)
-		if err := mkdir(filepath.Dir(libAbsPath)); err != nil {
-			return nil, err
-		}
-		err = goBuild(
-			pkg.ImportPath,
-			env,
-			"-buildmode=c-shared",
-			"-o", libAbsPath,
-		)
-		if err != nil {
-			return nil, err
-		}
-		nmpkgs[arch], err = extractPkgs(toolchain.Path("nm"), libAbsPath)
-		if err != nil {
-			return nil, err
-		}
-		libFiles = append(libFiles, libPath)
+	nmpkgs, err := extractPkgs(androidArmNM, libPath)
+	if err != nil {
+		return nil, err
 	}
 
 	block, _ := pem.Decode([]byte(debugCert))
@@ -90,7 +83,7 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 	}
 
 	if buildO == "" {
-		buildO = androidPkgName(filepath.Base(pkg.Dir)) + ".apk"
+		buildO = filepath.Base(pkg.Dir) + ".apk"
 	}
 	if !strings.HasSuffix(buildO, ".apk") {
 		return nil, fmt.Errorf("output file name %q does not end in '.apk'", buildO)
@@ -113,7 +106,7 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 	if !buildN {
 		apkw = NewWriter(out, privKey)
 	}
-	apkwCreate := func(name string) (io.Writer, error) {
+	apkwcreate := func(name string) (io.Writer, error) {
 		if buildV {
 			fmt.Fprintf(os.Stderr, "apk: %s\n", name)
 		}
@@ -122,25 +115,8 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 		}
 		return apkw.Create(name)
 	}
-	apkwWriteFile := func(dst, src string) error {
-		w, err := apkwCreate(dst)
-		if err != nil {
-			return err
-		}
-		if !buildN {
-			f, err := os.Open(src)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			if _, err := io.Copy(w, f); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 
-	w, err := apkwCreate("AndroidManifest.xml")
+	w, err := apkwcreate("AndroidManifest.xml")
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +124,7 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 		return nil, err
 	}
 
-	w, err = apkwCreate("classes.dex")
+	w, err = apkwcreate("classes.dex")
 	if err != nil {
 		return nil, err
 	}
@@ -160,24 +136,44 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 		return nil, err
 	}
 
-	for _, libFile := range libFiles {
-		if err := apkwWriteFile(libFile, filepath.Join(tmpdir, libFile)); err != nil {
+	w, err = apkwcreate("lib/armeabi/lib" + libName + ".so")
+	if err != nil {
+		return nil, err
+	}
+	if !buildN {
+		r, err := os.Open(libPath)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := io.Copy(w, r); err != nil {
 			return nil, err
 		}
 	}
 
-	for _, arch := range androidArchs {
-		toolchain := ndk.Toolchain(arch)
-		if nmpkgs[arch]["golang.org/x/mobile/exp/audio/al"] {
-			dst := "lib/" + toolchain.arch + "/libopenal.so"
-			src := dst
-			if arch == "arm" {
-				src = "lib/armeabi/libopenal.so"
+	if nmpkgs["golang.org/x/mobile/exp/audio/al"] {
+		alDir := filepath.Join(ndkccpath, "openal/lib")
+		filepath.Walk(alDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
 			}
-			if err := apkwWriteFile(dst, filepath.Join(ndk.Root(), "openal/"+src)); err != nil {
-				return nil, err
+			if info.IsDir() {
+				return nil
 			}
-		}
+			name := "lib/" + path[len(alDir)+1:]
+			w, err := apkwcreate(name)
+			if err != nil {
+				return err
+			}
+			if !buildN {
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				_, err = io.Copy(w, f)
+			}
+			return err
+		})
 	}
 
 	// Add any assets.
@@ -194,24 +190,25 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 		assetsDirExists = fi.IsDir()
 	}
 	if assetsDirExists {
-		// if assets is a symlink, follow the symlink.
-		assetsDir, err = filepath.EvalSymlinks(assetsDir)
-		if err != nil {
-			return nil, err
-		}
 		err = filepath.Walk(assetsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
-			}
-			if name := filepath.Base(path); strings.HasPrefix(name, ".") {
-				// Do not include the hidden files.
-				return nil
 			}
 			if info.IsDir() {
 				return nil
 			}
 			name := "assets/" + path[len(assetsDir)+1:]
-			return apkwWriteFile(name, path)
+			w, err := apkwcreate(name)
+			if err != nil {
+				return err
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = io.Copy(w, f)
+			return err
 		})
 		if err != nil {
 			return nil, fmt.Errorf("asset %v", err)
@@ -226,53 +223,7 @@ func goAndroidBuild(pkg *build.Package, androidArchs []string) (map[string]bool,
 		}
 	}
 
-	// TODO: return nmpkgs
-	return nmpkgs[androidArchs[0]], nil
-}
-
-// androidPkgName sanitizes the go package name to be acceptable as a android
-// package name part. The android package name convention is similar to the
-// java package name convention described in
-// https://docs.oracle.com/javase/specs/jls/se8/html/jls-6.html#jls-6.5.3.1
-// but not exactly same.
-func androidPkgName(name string) string {
-	var res []rune
-	for i, r := range name {
-		switch {
-		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z':
-			res = append(res, r)
-		case '0' <= r && r <= '9':
-			if i == 0 {
-				panic(fmt.Sprintf("package name %q is not a valid go package name", name))
-			}
-			res = append(res, r)
-		default:
-			res = append(res, '_')
-		}
-	}
-	if len(res) == 0 || res[0] == '_' {
-		// Android does not seem to allow the package part starting with _.
-		res = append([]rune{'g', 'o'}, res...)
-	}
-	s := string(res)
-	// Look for Java keywords that are not Go keywords, and avoid using
-	// them as a package name.
-	//
-	// This is not a problem for normal Go identifiers as we only expose
-	// exported symbols. The upper case first letter saves everything
-	// from accidentally matching except for the package name.
-	//
-	// Note that basic type names (like int) are not keywords in Go.
-	switch s {
-	case "abstract", "assert", "boolean", "byte", "catch", "char", "class",
-		"do", "double", "enum", "extends", "final", "finally", "float",
-		"implements", "instanceof", "int", "long", "native", "private",
-		"protected", "public", "short", "static", "strictfp", "super",
-		"synchronized", "this", "throw", "throws", "transient", "try",
-		"void", "volatile", "while":
-		s += "_"
-	}
-	return s
+	return nmpkgs, nil
 }
 
 // A random uninteresting private key.

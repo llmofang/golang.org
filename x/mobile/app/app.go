@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build linux darwin windows
+// +build linux darwin
 
 package app
 
 import (
 	"golang.org/x/mobile/event/lifecycle"
+	"golang.org/x/mobile/event/paint"
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/gl"
 	_ "golang.org/x/mobile/internal/mobileinit"
@@ -37,75 +38,41 @@ type App interface {
 	// Send sends an event on the events channel. It does not block.
 	Send(event interface{})
 
-	// Publish flushes any pending drawing commands, such as OpenGL calls, and
-	// swaps the back buffer to the screen.
-	Publish() PublishResult
-
-	// TODO: replace filters (and the Events channel) with a NextEvent method?
-
-	// Filter calls each registered event filter function in sequence.
-	Filter(event interface{}) interface{}
-
-	// RegisterFilter registers a event filter function to be called by Filter. The
-	// function can return a different event, or return nil to consume the event,
-	// but the function can also return its argument unchanged, where its purpose
-	// is to trigger a side effect rather than modify the event.
-	RegisterFilter(f func(interface{}) interface{})
+	// EndPaint flushes any pending OpenGL commands or buffers to the screen.
+	// If EndPaint is called with an old generation number, it is ignored.
+	EndPaint(paint.Event)
 }
 
-// PublishResult is the result of an App.Publish call.
-type PublishResult struct {
-	// BackBufferPreserved is whether the contents of the back buffer was
-	// preserved. If false, the contents are undefined.
-	BackBufferPreserved bool
-}
+var (
+	lifecycleStage = lifecycle.StageDead
 
-var theApp = &app{
-	eventsOut:      make(chan interface{}),
-	lifecycleStage: lifecycle.StageDead,
-	publish:        make(chan struct{}),
-	publishResult:  make(chan PublishResult),
-}
+	eventsOut = make(chan interface{})
+	eventsIn  = pump(eventsOut)
+	endPaint  = make(chan paint.Event, 1)
+)
 
-func init() {
-	theApp.eventsIn = pump(theApp.eventsOut)
-	theApp.glctx, theApp.worker = gl.NewContext()
-}
-
-func (a *app) sendLifecycle(to lifecycle.Stage) {
-	if a.lifecycleStage == to {
+func sendLifecycle(to lifecycle.Stage) {
+	if lifecycleStage == to {
 		return
 	}
-	a.eventsIn <- lifecycle.Event{
-		From:        a.lifecycleStage,
-		To:          to,
-		DrawContext: a.glctx,
+	eventsIn <- lifecycle.Event{
+		From: lifecycleStage,
+		To:   to,
 	}
-	a.lifecycleStage = to
+	lifecycleStage = to
 }
 
-type app struct {
-	filters []func(interface{}) interface{}
+type app struct{}
 
-	eventsOut      chan interface{}
-	eventsIn       chan interface{}
-	lifecycleStage lifecycle.Stage
-	publish        chan struct{}
-	publishResult  chan PublishResult
-
-	glctx  gl.Context
-	worker gl.Worker
+func (app) Events() <-chan interface{} {
+	return eventsOut
 }
 
-func (a *app) Events() <-chan interface{} {
-	return a.eventsOut
+func (app) Send(event interface{}) {
+	eventsIn <- event
 }
 
-func (a *app) Send(event interface{}) {
-	a.eventsIn <- event
-}
-
-func (a *app) Publish() PublishResult {
+func (app) EndPaint(e paint.Event) {
 	// gl.Flush is a lightweight (on modern GL drivers) blocking call
 	// that ensures all GL functions pending in the gl package have
 	// been passed onto the GL driver before the app package attempts
@@ -113,20 +80,28 @@ func (a *app) Publish() PublishResult {
 	//
 	// This enforces that the final receive (for this paint cycle) on
 	// gl.WorkAvailable happens before the send on endPaint.
-	a.glctx.Flush()
-	a.publish <- struct{}{}
-	return <-a.publishResult
+	gl.Flush()
+	endPaint <- e
 }
 
-func (a *app) Filter(event interface{}) interface{} {
-	for _, f := range a.filters {
+var filters []func(interface{}) interface{}
+
+// Filter calls each registered event filter function in sequence.
+func Filter(event interface{}) interface{} {
+	for _, f := range filters {
 		event = f(event)
 	}
 	return event
 }
 
-func (a *app) RegisterFilter(f func(interface{}) interface{}) {
-	a.filters = append(a.filters, f)
+// RegisterFilter registers a event filter function to be called by Filter. The
+// function can return a different event, or return nil to consume the event,
+// but the function can also return its argument unchanged, where its purpose
+// is to trigger a side effect rather than modify the event.
+//
+// RegisterFilter should only be called from init functions.
+func RegisterFilter(f func(interface{}) interface{}) {
+	filters = append(filters, f)
 }
 
 type stopPumping struct{}
@@ -198,10 +173,10 @@ func pump(dst chan interface{}) (src chan interface{}) {
 //
 // TODO: does Android need this?? It seems to work without it (Nexus 7,
 // KitKat). If only x11 needs this, should we move this to x11.go??
-func (a *app) registerGLViewportFilter() {
-	a.RegisterFilter(func(e interface{}) interface{} {
+func registerGLViewportFilter() {
+	RegisterFilter(func(e interface{}) interface{} {
 		if e, ok := e.(size.Event); ok {
-			a.glctx.Viewport(0, 0, e.WidthPx, e.HeightPx)
+			gl.Viewport(0, 0, e.WidthPx, e.HeightPx)
 		}
 		return e
 	})

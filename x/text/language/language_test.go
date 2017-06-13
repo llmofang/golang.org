@@ -7,8 +7,6 @@ package language
 import (
 	"reflect"
 	"testing"
-
-	"golang.org/x/text/internal/testtext"
 )
 
 func TestTagSize(t *testing.T) {
@@ -71,7 +69,7 @@ func TestMakeString(t *testing.T) {
 		// The bytes to string conversion as used in remakeString
 		// occasionally measures as more than one alloc, breaking this test.
 		// To alleviate this we set the number of runs to more than 1.
-		if n := testtext.AllocsPerRun(8, id.remakeString); n > 1 {
+		if n := testing.AllocsPerRun(8, id.remakeString); n > 1 {
 			t.Errorf("%d: # allocs got %.1f; want <= 1", i, n)
 		}
 	}
@@ -91,11 +89,11 @@ func TestCompactIndex(t *testing.T) {
 		{"ca-ES-valencia-u-co-phonebk", 1, true},
 		{"ca-ES-valencia-u-co-phonebk-va-posix", 0, false},
 		{"x-klingon", 0, false},
-		{"en-US", 229, true},
+		{"en-US", 225, true},
 		{"en-US-u-va-posix", 2, true},
-		{"en", 133, true},
-		{"en-u-co-phonebk", 133, true},
-		{"en-001", 134, true},
+		{"en", 129, true},
+		{"en-u-co-phonebk", 129, true},
+		{"en-001", 130, true},
 		{"sh", 0, false}, // We don't normalize.
 	}
 	for _, tt := range tests {
@@ -174,7 +172,7 @@ func TestScript(t *testing.T) {
 		{"cmn", "Hans", Low},
 		{"ru", "Cyrl", High},
 		{"ru-RU", "Cyrl", High},
-		{"yue", "Hant", Low},
+		{"yue", "Zzzz", No},
 		{"x-abc", "Zzzz", Low},
 		{"und-zyyy", "Zyyy", Exact},
 	}
@@ -228,17 +226,17 @@ func TestRegion(t *testing.T) {
 		{"en-US", "US", Exact},
 		{"cmn", "CN", Low},
 		{"ru", "RU", Low},
-		{"yue", "HK", Low},
+		{"yue", "ZZ", No},
 		{"x-abc", "ZZ", Low},
 	}
 	for i, tt := range tests {
 		loc, _ := Raw.Parse(tt.loc)
 		reg, conf := loc.Region()
 		if reg.String() != tt.reg {
-			t.Errorf("%d:%s: region was %s; want %s", i, tt.loc, reg, tt.reg)
+			t.Errorf("%d: region was %s; want %s", i, reg, tt.reg)
 		}
 		if conf != tt.conf {
-			t.Errorf("%d:%s: confidence was %d; want %d", i, tt.loc, conf, tt.conf)
+			t.Errorf("%d: confidence was %d; want %d", i, conf, tt.conf)
 		}
 	}
 }
@@ -506,7 +504,6 @@ func TestCanonicalize(t *testing.T) {
 		{"no", "nb", Legacy | CLDR},
 		{"cmn", "cmn", Legacy},
 		{"cmn", "zh", Macro},
-		{"cmn-u-co-stroke", "zh-u-co-stroke", Macro},
 		{"yue", "yue", Macro},
 		{"nb", "no", Macro},
 		{"nb", "nb", Macro | CLDR},
@@ -532,9 +529,6 @@ func TestCanonicalize(t *testing.T) {
 		if in.String() != tt.out {
 			t.Errorf("%d:%s: was %s; want %s", i, tt.in, in.String(), tt.out)
 		}
-		if int(in.pVariant) > int(in.pExt) || int(in.pExt) > len(in.str) {
-			t.Errorf("%d:%s:offsets %d <= %d <= %d must be true", i, tt.in, in.pVariant, in.pExt, len(in.str))
-		}
 	}
 	// Test idempotence.
 	for _, base := range Supported.BaseLanguages() {
@@ -555,7 +549,6 @@ func TestTypeForKey(t *testing.T) {
 		{"co", "en-u-co-phonebk-cu-aud", "phonebk"},
 		{"co", "x-foo-u-co-phonebk", ""},
 		{"nu", "en-u-co-phonebk-nu-arabic", "arabic"},
-		{"kc", "cmn-u-co-stroke", ""},
 	}
 	for _, tt := range tests {
 		if v := Make(tt.in).TypeForKey(tt.key); v != tt.out {

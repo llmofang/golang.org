@@ -71,14 +71,9 @@ class GobindTask extends DefaultTask implements OutputFileTask {
 
 	    paths = [findDir(gomobile), findDir(gobin), paths].flatten()
 
-	    def androidHome = ""
-	    try {
-		    Properties properties = new Properties()
-		    properties.load(project.rootProject.file('local.properties').newDataInputStream())
-		    androidHome = properties.getProperty('sdk.dir')
-	    } catch (all) {
-		logger.info("failed to load local.properties.")
-	    }
+	    Properties properties = new Properties()
+	    properties.load(project.rootProject.file('local.properties').newDataInputStream())
+	    def androidHome = properties.getProperty('sdk.dir')
 	    if (!androidHome?.trim()) {
 		// fallback to ANDROID_HOME
 		androidHome = System.getenv("ANDROID_HOME")

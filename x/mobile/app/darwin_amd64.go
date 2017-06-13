@@ -12,7 +12,7 @@ package app
 
 /*
 #cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Cocoa -framework OpenGL
+#cgo LDFLAGS: -framework Cocoa -framework OpenGL -framework QuartzCore
 #import <Carbon/Carbon.h> // for HIToolbox/Events.h
 #import <Cocoa/Cocoa.h>
 #include <pthread.h>
@@ -34,6 +34,7 @@ import (
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/geom"
+	"golang.org/x/mobile/gl"
 )
 
 var initThreadID uint64
@@ -56,7 +57,7 @@ func main(f func(App)) {
 	}
 
 	go func() {
-		f(theApp)
+		f(app{})
 		C.stopApp()
 		// TODO(crawshaw): trigger runApp to return
 	}()
@@ -70,59 +71,44 @@ func main(f func(App)) {
 // events in runApp, it starts loop on another goroutine. It is locked
 // to an OS thread for its OpenGL context.
 //
-// The loop processes GL calls until a publish event appears.
-// Then it runs any remaining GL calls and flushes the screen.
-//
-// As NSOpenGLCPSwapInterval is set to 1, the call to CGLFlushDrawable
-// blocks until the screen refresh.
-func (a *app) loop(ctx C.GLintptr) {
+// Two Cocoa threads deliver draw signals to loop. The primary source of
+// draw events is the CVDisplayLink timer, which is tied to the display
+// vsync. Secondary draw events come from [NSView drawRect:] when the
+// window is resized.
+func loop(ctx C.GLintptr) {
 	runtime.LockOSThread()
 	C.makeCurrentContext(ctx)
 
-	workAvailable := a.worker.WorkAvailable()
-
-	for {
-		select {
-		case <-workAvailable:
-			a.worker.DoWork()
-		case <-theApp.publish:
-		loop1:
-			for {
-				select {
-				case <-workAvailable:
-					a.worker.DoWork()
-				default:
-					break loop1
-				}
-			}
-			C.CGLFlushDrawable(C.CGLGetCurrentContext())
-			theApp.publishResult <- PublishResult{}
+	for range draw {
+		eventsIn <- paint.Event{}
+	loop1:
+		for {
 			select {
-			case drawDone <- struct{}{}:
-			default:
+			case <-gl.WorkAvailable:
+				gl.DoWork()
+			case <-endPaint:
+				C.CGLFlushDrawable(C.CGLGetCurrentContext())
+				break loop1
 			}
 		}
+		drawDone <- struct{}{}
 	}
 }
 
-var drawDone = make(chan struct{})
+var (
+	draw     = make(chan struct{})
+	drawDone = make(chan struct{})
+)
 
-// drawgl is used by Cocoa to occasionally request screen updates.
-//
 //export drawgl
 func drawgl() {
-	switch theApp.lifecycleStage {
-	case lifecycle.StageFocused, lifecycle.StageVisible:
-		theApp.Send(paint.Event{
-			External: true,
-		})
-		<-drawDone
-	}
+	draw <- struct{}{}
+	<-drawDone
 }
 
 //export startloop
 func startloop(ctx C.GLintptr) {
-	go theApp.loop(ctx)
+	go loop(ctx)
 }
 
 var windowHeightPx float32
@@ -130,7 +116,7 @@ var windowHeightPx float32
 //export setGeom
 func setGeom(pixelsPerPt float32, widthPx, heightPx int) {
 	windowHeightPx = float32(heightPx)
-	theApp.eventsIn <- size.Event{
+	eventsIn <- size.Event{
 		WidthPx:     widthPx,
 		HeightPx:    heightPx,
 		WidthPt:     geom.Pt(float32(widthPx) / pixelsPerPt),
@@ -145,7 +131,7 @@ var touchEvents struct {
 }
 
 func sendTouch(t touch.Type, x, y float32) {
-	theApp.eventsIn <- touch.Event{
+	eventsIn <- touch.Event{
 		X:        x,
 		Y:        windowHeightPx - y,
 		Sequence: 0,
@@ -163,7 +149,7 @@ func eventMouseDragged(x, y float32) { sendTouch(touch.TypeMove, x, y) }
 func eventMouseEnd(x, y float32) { sendTouch(touch.TypeEnd, x, y) }
 
 //export lifecycleDead
-func lifecycleDead() { theApp.sendLifecycle(lifecycle.StageDead) }
+func lifecycleDead() { sendLifecycle(lifecycle.StageDead) }
 
 //export eventKey
 func eventKey(runeVal int32, direction uint8, code uint16, flags uint32) {
@@ -174,7 +160,7 @@ func eventKey(runeVal int32, direction uint8, code uint16, flags uint32) {
 		}
 	}
 
-	theApp.eventsIn <- key.Event{
+	eventsIn <- key.Event{
 		Rune:      convRune(rune(runeVal)),
 		Code:      convVirtualKeyCode(code),
 		Modifiers: modifiers,
@@ -215,15 +201,13 @@ var mods = [...]struct {
 }
 
 //export lifecycleAlive
-func lifecycleAlive() { theApp.sendLifecycle(lifecycle.StageAlive) }
+func lifecycleAlive() { sendLifecycle(lifecycle.StageAlive) }
 
 //export lifecycleVisible
-func lifecycleVisible() {
-	theApp.sendLifecycle(lifecycle.StageVisible)
-}
+func lifecycleVisible() { sendLifecycle(lifecycle.StageVisible) }
 
 //export lifecycleFocused
-func lifecycleFocused() { theApp.sendLifecycle(lifecycle.StageFocused) }
+func lifecycleFocused() { sendLifecycle(lifecycle.StageFocused) }
 
 // convRune marks the Carbon/Cocoa private-range unicode rune representing
 // a non-unicode key event to -1, used for Rune in the key package.

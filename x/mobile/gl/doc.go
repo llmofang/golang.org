@@ -14,7 +14,9 @@ https://www.khronos.org/opengles/sdk/docs/man/
 One notable departure from the C API is the introduction of types
 to represent common uses of GLint: Texture, Surface, Buffer, etc.
 
-Debug Logging
+Calls are not safe for concurrent use. However calls can be made from
+any goroutine, the gl package removes the notion of thread-local
+context.
 
 A tracing version of the OpenGL bindings is behind the `gldebug` build
 tag. It acts as a simplified version of apitrace. Build your Go binary

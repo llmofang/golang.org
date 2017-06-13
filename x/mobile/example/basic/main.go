@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin linux windows
+// +build darwin linux
 
 // An app that draws a green triangle on a red background.
 //
@@ -44,8 +44,6 @@ import (
 )
 
 var (
-	images   *glutil.Images
-	fps      *debug.FPS
 	program  gl.Program
 	position gl.Attrib
 	offset   gl.Uniform
@@ -59,37 +57,23 @@ var (
 
 func main() {
 	app.Main(func(a app.App) {
-		var glctx gl.Context
 		var sz size.Event
 		for e := range a.Events() {
-			switch e := a.Filter(e).(type) {
+			switch e := app.Filter(e).(type) {
 			case lifecycle.Event:
 				switch e.Crosses(lifecycle.StageVisible) {
 				case lifecycle.CrossOn:
-					glctx, _ = e.DrawContext.(gl.Context)
-					onStart(glctx)
-					a.Send(paint.Event{})
+					onStart()
 				case lifecycle.CrossOff:
-					onStop(glctx)
-					glctx = nil
+					onStop()
 				}
 			case size.Event:
 				sz = e
 				touchX = float32(sz.WidthPx / 2)
 				touchY = float32(sz.HeightPx / 2)
 			case paint.Event:
-				if glctx == nil || e.External {
-					// As we are actively painting as fast as
-					// we can (usually 60 FPS), skip any paint
-					// events sent by the system.
-					continue
-				}
-
-				onPaint(glctx, sz)
-				a.Publish()
-				// Drive the animation by preparing to paint the next frame
-				// after this one is shown.
-				a.Send(paint.Event{})
+				onPaint(sz)
+				a.EndPaint(e)
 			case touch.Event:
 				touchX = e.X
 				touchY = e.Y
@@ -98,54 +82,52 @@ func main() {
 	})
 }
 
-func onStart(glctx gl.Context) {
+func onStart() {
 	var err error
-	program, err = glutil.CreateProgram(glctx, vertexShader, fragmentShader)
+	program, err = glutil.CreateProgram(vertexShader, fragmentShader)
 	if err != nil {
 		log.Printf("error creating GL program: %v", err)
 		return
 	}
 
-	buf = glctx.CreateBuffer()
-	glctx.BindBuffer(gl.ARRAY_BUFFER, buf)
-	glctx.BufferData(gl.ARRAY_BUFFER, triangleData, gl.STATIC_DRAW)
+	buf = gl.CreateBuffer()
+	gl.BindBuffer(gl.ARRAY_BUFFER, buf)
+	gl.BufferData(gl.ARRAY_BUFFER, triangleData, gl.STATIC_DRAW)
 
-	position = glctx.GetAttribLocation(program, "position")
-	color = glctx.GetUniformLocation(program, "color")
-	offset = glctx.GetUniformLocation(program, "offset")
+	position = gl.GetAttribLocation(program, "position")
+	color = gl.GetUniformLocation(program, "color")
+	offset = gl.GetUniformLocation(program, "offset")
 
-	images = glutil.NewImages(glctx)
-	fps = debug.NewFPS(images)
+	// TODO(crawshaw): the debug package needs to put GL state init here
+	// Can this be an app.RegisterFilter call now??
 }
 
-func onStop(glctx gl.Context) {
-	glctx.DeleteProgram(program)
-	glctx.DeleteBuffer(buf)
-	fps.Release()
-	images.Release()
+func onStop() {
+	gl.DeleteProgram(program)
+	gl.DeleteBuffer(buf)
 }
 
-func onPaint(glctx gl.Context, sz size.Event) {
-	glctx.ClearColor(1, 0, 0, 1)
-	glctx.Clear(gl.COLOR_BUFFER_BIT)
+func onPaint(sz size.Event) {
+	gl.ClearColor(1, 0, 0, 1)
+	gl.Clear(gl.COLOR_BUFFER_BIT)
 
-	glctx.UseProgram(program)
+	gl.UseProgram(program)
 
 	green += 0.01
 	if green > 1 {
 		green = 0
 	}
-	glctx.Uniform4f(color, 0, green, 0, 1)
+	gl.Uniform4f(color, 0, green, 0, 1)
 
-	glctx.Uniform2f(offset, touchX/float32(sz.WidthPx), touchY/float32(sz.HeightPx))
+	gl.Uniform2f(offset, touchX/float32(sz.WidthPx), touchY/float32(sz.HeightPx))
 
-	glctx.BindBuffer(gl.ARRAY_BUFFER, buf)
-	glctx.EnableVertexAttribArray(position)
-	glctx.VertexAttribPointer(position, coordsPerVertex, gl.FLOAT, false, 0, 0)
-	glctx.DrawArrays(gl.TRIANGLES, 0, vertexCount)
-	glctx.DisableVertexAttribArray(position)
+	gl.BindBuffer(gl.ARRAY_BUFFER, buf)
+	gl.EnableVertexAttribArray(position)
+	gl.VertexAttribPointer(position, coordsPerVertex, gl.FLOAT, false, 0, 0)
+	gl.DrawArrays(gl.TRIANGLES, 0, vertexCount)
+	gl.DisableVertexAttribArray(position)
 
-	fps.Draw(sz)
+	debug.DrawFPS(sz)
 }
 
 var triangleData = f32.Bytes(binary.LittleEndian,

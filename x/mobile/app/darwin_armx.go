@@ -34,6 +34,7 @@ import (
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/geom"
+	"golang.org/x/mobile/gl"
 )
 
 var initThreadID uint64
@@ -56,7 +57,7 @@ func main(f func(App)) {
 	}
 
 	go func() {
-		f(theApp)
+		f(app{})
 		// TODO(crawshaw): trigger runApp to return
 	}()
 	C.runApp()
@@ -108,7 +109,7 @@ func updateConfig(width, height, orientation int32) {
 	}
 	widthPx := screenScale * int(width)
 	heightPx := screenScale * int(height)
-	theApp.eventsIn <- size.Event{
+	eventsIn <- size.Event{
 		WidthPx:     widthPx,
 		HeightPx:    heightPx,
 		WidthPt:     geom.Pt(float32(widthPx) / pixelsPerPt),
@@ -117,6 +118,8 @@ func updateConfig(width, height, orientation int32) {
 		Orientation: o,
 	}
 }
+
+var startedgl = false
 
 // touchIDs is the current active touches. The position in the array
 // is the ID, the value is the UITouch* pointer value.
@@ -157,7 +160,7 @@ func sendTouch(cTouch, cTouchType uintptr, x, y float32) {
 		touchIDs[id] = 0
 	}
 
-	theApp.eventsIn <- touch.Event{
+	eventsIn <- touch.Event{
 		X:        x,
 		Y:        y,
 		Sequence: touch.Sequence(id),
@@ -165,27 +168,22 @@ func sendTouch(cTouch, cTouchType uintptr, x, y float32) {
 	}
 }
 
-var workAvailable <-chan struct{}
-
 //export drawgl
 func drawgl(ctx uintptr) {
-	if workAvailable == nil {
+	if !startedgl {
+		startedgl = true
 		C.setContext(unsafe.Pointer(ctx))
-		workAvailable = theApp.worker.WorkAvailable()
 		// TODO(crawshaw): not just on process start.
-		theApp.sendLifecycle(lifecycle.StageFocused)
+		sendLifecycle(lifecycle.StageFocused)
 	}
 
-	// TODO(crawshaw): don't send a paint.Event unconditionally. Only send one
-	// if the window actually needs redrawing.
-	theApp.eventsIn <- paint.Event{}
+	eventsIn <- paint.Event{}
 
 	for {
 		select {
-		case <-workAvailable:
-			theApp.worker.DoWork()
-		case <-theApp.publish:
-			theApp.publishResult <- PublishResult{}
+		case <-gl.WorkAvailable:
+			gl.DoWork()
+		case <-endPaint:
 			return
 		}
 	}

@@ -31,22 +31,6 @@ func TestAndroidApp(t *testing.T) {
 	if _, err := exec.Command("which", "adb").CombinedOutput(); err != nil {
 		t.Skip("command adb not found, skipping")
 	}
-	devicesTxt, err := exec.Command("adb", "devices").CombinedOutput()
-	if err != nil {
-		t.Errorf("adb devices failed: %v: %v", err, devicesTxt)
-	}
-	deviceCount := 0
-	for _, d := range strings.Split(strings.TrimSpace(string(devicesTxt)), "\n") {
-		if strings.Contains(d, "List of devices") {
-			continue
-		}
-		// TODO(crawshaw): I believe some unusable devices can appear in the
-		// list with note on them, but I cannot reproduce this right now.
-		deviceCount++
-	}
-	if deviceCount == 0 {
-		t.Skip("no android devices attached")
-	}
 
 	run(t, "gomobile", "version")
 
@@ -154,14 +138,14 @@ func TestAndroidApp(t *testing.T) {
 	var x, y int
 	var ty string
 
-	tap(t, 50, 260)
+	tap(t, 50, 60)
 	comm.Recv("touch", &ty, &x, &y)
-	if ty != "begin" || x != 50 || y != 260 {
-		t.Errorf("want touch begin(50, 260), got %s(%d,%d)", ty, x, y)
+	if ty != "begin" || x != 50 || y != 60 {
+		t.Errorf("want touch begin(50, 60), got %s(%d,%d)", ty, x, y)
 	}
 	comm.Recv("touch", &ty, &x, &y)
-	if ty != "end" || x != 50 || y != 260 {
-		t.Errorf("want touch end(50, 260), got %s(%d,%d)", ty, x, y)
+	if ty != "end" || x != 50 || y != 60 {
+		t.Errorf("want touch end(50, 60), got %s(%d,%d)", ty, x, y)
 	}
 
 	comm.Recv("paint", &color)
@@ -175,7 +159,7 @@ func TestAndroidApp(t *testing.T) {
 		t.Errorf("want orientation %d, got %d", want, orientation)
 	}
 
-	tap(t, 50, 260)
+	tap(t, 50, 60)
 	comm.Recv("touch", &ty, &x, &y) // touch begin
 	comm.Recv("touch", &ty, &x, &y) // touch end
 	comm.Recv("paint", &color)

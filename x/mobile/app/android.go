@@ -25,9 +25,7 @@ package app
 #cgo LDFLAGS: -landroid -llog -lEGL -lGLESv2
 
 #include <android/configuration.h>
-#include <android/input.h>
 #include <android/keycodes.h>
-#include <android/looper.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
 #include <EGL/egl.h>
@@ -47,6 +45,7 @@ EGLSurface surface;
 char* initEGLDisplay();
 char* createEGLSurface(ANativeWindow* window);
 char* destroyEGLSurface();
+char* attachJNI(JNIEnv**);
 int32_t getKeyRune(JNIEnv* env, AInputEvent* e);
 */
 import "C"
@@ -54,6 +53,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -64,6 +64,7 @@ import (
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/geom"
+	"golang.org/x/mobile/gl"
 	"golang.org/x/mobile/internal/mobileinit"
 )
 
@@ -136,7 +137,8 @@ func onWindowFocusChanged(activity *C.ANativeActivity, hasFocus int) {
 }
 
 //export onNativeWindowCreated
-func onNativeWindowCreated(activity *C.ANativeActivity, window *C.ANativeWindow) {
+func onNativeWindowCreated(activity *C.ANativeActivity, w *C.ANativeWindow) {
+	windowCreated <- w
 }
 
 //export onNativeWindowRedrawNeeded
@@ -157,15 +159,12 @@ func onNativeWindowDestroyed(activity *C.ANativeActivity, window *C.ANativeWindo
 
 //export onInputQueueCreated
 func onInputQueueCreated(activity *C.ANativeActivity, q *C.AInputQueue) {
-	C.AInputQueue_detachLooper(q)
 	inputQueue <- q
-	<-inputQueueDone
 }
 
 //export onInputQueueDestroyed
 func onInputQueueDestroyed(activity *C.ANativeActivity, q *C.AInputQueue) {
 	inputQueue <- nil
-	<-inputQueueDone
 }
 
 //export onContentRectChanged
@@ -237,64 +236,76 @@ func onLowMemory(activity *C.ANativeActivity) {
 
 var (
 	inputQueue         = make(chan *C.AInputQueue)
-	inputQueueDone     = make(chan struct{})
 	windowDestroyed    = make(chan *C.ANativeWindow)
+	windowCreated      = make(chan *C.ANativeWindow)
 	windowRedrawNeeded = make(chan *C.ANativeWindow)
 	windowRedrawDone   = make(chan struct{})
 	windowConfigChange = make(chan windowConfig)
 )
 
 func init() {
-	theApp.registerGLViewportFilter()
+	registerGLViewportFilter()
 }
 
 func main(f func(App)) {
-	mainUserFn = f
-	// TODO: merge the runInputQueue and mainUI functions?
-	go func() {
-		if err := mobileinit.RunOnJVM(runInputQueue); err != nil {
-			log.Fatalf("app: %v", err)
-		}
-	}()
 	// Preserve this OS thread for:
 	//	1. the attached JNI thread
 	//	2. the GL context
-	if err := mobileinit.RunOnJVM(mainUI); err != nil {
-		log.Fatalf("app: %v", err)
+	runtime.LockOSThread()
+
+	// Calls into NativeActivity functions must be made from
+	// a thread attached to the JNI.
+	var env *C.JNIEnv
+	if errStr := C.attachJNI(&env); errStr != nil {
+		log.Fatalf("app: %s", C.GoString(errStr))
 	}
-}
-
-var mainUserFn func(App)
-
-func mainUI(vm, jniEnv, ctx uintptr) error {
-	workAvailable := theApp.worker.WorkAvailable()
 
 	donec := make(chan struct{})
 	go func() {
-		mainUserFn(theApp)
+		f(app{})
 		close(donec)
 	}()
 
+	var q *C.AInputQueue
 	var pixelsPerPt float32
 	var orientation size.Orientation
 
+	// Android can send a windowRedrawNeeded event any time, including
+	// in the middle of a paint cycle. The redraw event may have changed
+	// the size of the screen, so any partial painting is now invalidated.
+	// We must also not return to Android (via sending on windowRedrawDone)
+	// until a complete paint with the new configuration is complete.
+	//
+	// When a windowRedrawNeeded request comes in, we increment redrawGen
+	// (Gen is short for generation number), and do not make a paint cycle
+	// visible on <-endPaint unless Generation agrees. If possible,
+	// windowRedrawDone is signalled, allowing onNativeWindowRedrawNeeded
+	// to return.
+	var redrawGen uint32
+
 	for {
+		if q != nil {
+			processEvents(env, q)
+		}
 		select {
+		case <-windowCreated:
+		case q = <-inputQueue:
 		case <-donec:
-			return nil
+			return
 		case cfg := <-windowConfigChange:
 			pixelsPerPt = cfg.pixelsPerPt
 			orientation = cfg.orientation
 		case w := <-windowRedrawNeeded:
 			if C.surface == nil {
 				if errStr := C.createEGLSurface(w); errStr != nil {
-					return fmt.Errorf("%s (%s)", C.GoString(errStr), eglGetError())
+					log.Printf("app: %s (%s)", C.GoString(errStr), eglGetError())
+					return
 				}
 			}
-			theApp.sendLifecycle(lifecycle.StageFocused)
+			sendLifecycle(lifecycle.StageFocused)
 			widthPx := int(C.ANativeWindow_getWidth(w))
 			heightPx := int(C.ANativeWindow_getHeight(w))
-			theApp.eventsIn <- size.Event{
+			eventsIn <- size.Event{
 				WidthPx:     widthPx,
 				HeightPx:    heightPx,
 				WidthPt:     geom.Pt(float32(widthPx) / pixelsPerPt),
@@ -302,19 +313,23 @@ func mainUI(vm, jniEnv, ctx uintptr) error {
 				PixelsPerPt: pixelsPerPt,
 				Orientation: orientation,
 			}
-			theApp.eventsIn <- paint.Event{External: true}
+			redrawGen++
+			eventsIn <- paint.Event{redrawGen}
 		case <-windowDestroyed:
 			if C.surface != nil {
 				if errStr := C.destroyEGLSurface(); errStr != nil {
-					return fmt.Errorf("%s (%s)", C.GoString(errStr), eglGetError())
+					log.Printf("app: %s (%s)", C.GoString(errStr), eglGetError())
+					return
 				}
 			}
 			C.surface = nil
-			theApp.sendLifecycle(lifecycle.StageAlive)
-		case <-workAvailable:
-			theApp.worker.DoWork()
-		case <-theApp.publish:
-			// TODO: compare a generation number to redrawGen for stale paints?
+			sendLifecycle(lifecycle.StageAlive)
+		case <-gl.WorkAvailable:
+			gl.DoWork()
+		case p := <-endPaint:
+			if p.Generation != redrawGen {
+				continue
+			}
 			if C.surface != nil {
 				// eglSwapBuffers blocks until vsync.
 				if C.eglSwapBuffers(C.display, C.surface) == C.EGL_FALSE {
@@ -325,56 +340,22 @@ func mainUI(vm, jniEnv, ctx uintptr) error {
 			case windowRedrawDone <- struct{}{}:
 			default:
 			}
-			theApp.publishResult <- PublishResult{}
-		}
-	}
-}
-
-func runInputQueue(vm, jniEnv, ctx uintptr) error {
-	env := (*C.JNIEnv)(unsafe.Pointer(jniEnv)) // not a Go heap pointer
-
-	// Android loopers select on OS file descriptors, not Go channels, so we
-	// translate the inputQueue channel to an ALooper_wake call.
-	l := C.ALooper_prepare(C.ALOOPER_PREPARE_ALLOW_NON_CALLBACKS)
-	pending := make(chan *C.AInputQueue, 1)
-	go func() {
-		for q := range inputQueue {
-			pending <- q
-			C.ALooper_wake(l)
-		}
-	}()
-
-	var q *C.AInputQueue
-	for {
-		if C.ALooper_pollAll(-1, nil, nil, nil) == C.ALOOPER_POLL_WAKE {
-			select {
-			default:
-			case p := <-pending:
-				if q != nil {
-					processEvents(env, q)
-					C.AInputQueue_detachLooper(q)
-				}
-				q = p
-				if q != nil {
-					C.AInputQueue_attachLooper(q, l, 0, nil, nil)
-				}
-				inputQueueDone <- struct{}{}
+			if C.surface != nil {
+				redrawGen++
+				eventsIn <- paint.Event{redrawGen}
 			}
 		}
-		if q != nil {
-			processEvents(env, q)
-		}
 	}
 }
 
-func processEvents(env *C.JNIEnv, q *C.AInputQueue) {
-	var e *C.AInputEvent
-	for C.AInputQueue_getEvent(q, &e) >= 0 {
-		if C.AInputQueue_preDispatchEvent(q, e) != 0 {
+func processEvents(env *C.JNIEnv, queue *C.AInputQueue) {
+	var event *C.AInputEvent
+	for C.AInputQueue_getEvent(queue, &event) >= 0 {
+		if C.AInputQueue_preDispatchEvent(queue, event) != 0 {
 			continue
 		}
-		processEvent(env, e)
-		C.AInputQueue_finishEvent(q, e, 0)
+		processEvent(env, event)
+		C.AInputQueue_finishEvent(queue, event, 0)
 	}
 }
 
@@ -398,7 +379,7 @@ func processEvent(env *C.JNIEnv, e *C.AInputEvent) {
 			if i == upDownIndex {
 				t = upDownType
 			}
-			theApp.eventsIn <- touch.Event{
+			eventsIn <- touch.Event{
 				X:        float32(C.AMotionEvent_getX(e, i)),
 				Y:        float32(C.AMotionEvent_getY(e, i)),
 				Sequence: touch.Sequence(C.AMotionEvent_getPointerId(e, i)),
@@ -430,7 +411,7 @@ func processKey(env *C.JNIEnv, e *C.AInputEvent) {
 		k.Direction = key.DirNone
 	}
 	// TODO(crawshaw): set Modifiers.
-	theApp.eventsIn <- k
+	eventsIn <- k
 }
 
 func eglGetError() string {

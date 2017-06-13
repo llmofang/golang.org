@@ -2,14 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin linux
-
 #include <stdlib.h>
 #include "_cgo_export.h"
 #include "work.h"
 
-uintptr_t processFn(struct fnargs* args, char* parg) {
-	uintptr_t ret = 0;
+void processFn(struct fnargs* args) {
 	switch (args->fn) {
 	case glfnUNDEFINED:
 		abort(); // bad glfn
@@ -22,6 +19,7 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		break;
 	case glfnBindAttribLocation:
 		glBindAttribLocation((GLint)args->a0, (GLint)args->a1, (GLchar*)args->a2);
+		free((void*)args->a2);
 		break;
 	case glfnBindBuffer:
 		glBindBuffer((GLenum)args->a0, (GLuint)args->a1);
@@ -51,10 +49,10 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glBlendFuncSeparate((GLenum)args->a0, (GLenum)args->a1, (GLenum)args->a2, (GLenum)args->a3);
 		break;
 	case glfnBufferData:
-		glBufferData((GLenum)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg, (GLenum)args->a2);
+		glBufferData((GLenum)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2, (GLenum)args->a3);
 		break;
 	case glfnBufferSubData:
-		glBufferSubData((GLenum)args->a0, (GLint)args->a1, (GLsizeiptr)args->a2, (GLvoid*)parg);
+		glBufferSubData((GLenum)args->a0, (GLint)args->a1, (GLsizeiptr)args->a2, (GLvoid*)args->a3);
 		break;
 	case glfnCheckFramebufferStatus:
 		ret = glCheckFramebufferStatus((GLenum)args->a0);
@@ -78,10 +76,10 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glCompileShader((GLint)args->a0);
 		break;
 	case glfnCompressedTexImage2D:
-		glCompressedTexImage2D((GLenum)args->a0, (GLint)args->a1, (GLenum)args->a2, (GLint)args->a3, (GLint)args->a4, (GLint)args->a5, (GLsizeiptr)args->a6, (GLvoid*)parg);
+		glCompressedTexImage2D((GLenum)args->a0, (GLint)args->a1, (GLenum)args->a2, (GLint)args->a3, (GLint)args->a4, (GLint)args->a5, (GLsizeiptr)args->a6, (GLvoid*)args->a7);
 		break;
 	case glfnCompressedTexSubImage2D:
-		glCompressedTexSubImage2D((GLenum)args->a0, (GLint)args->a1, (GLint)args->a2, (GLint)args->a3, (GLint)args->a4, (GLint)args->a5, (GLenum)args->a6, (GLsizeiptr)args->a7, (GLvoid*)parg);
+		glCompressedTexSubImage2D((GLenum)args->a0, (GLint)args->a1, (GLint)args->a2, (GLint)args->a3, (GLint)args->a4, (GLint)args->a5, (GLenum)args->a6, (GLsizeiptr)args->a7, (GLvoid*)args->a8);
 		break;
 	case glfnCopyTexImage2D:
 		glCopyTexImage2D((GLenum)args->a0, (GLint)args->a1, (GLenum)args->a2, (GLint)args->a3, (GLint)args->a4, (GLint)args->a5, (GLint)args->a6, (GLint)args->a7);
@@ -182,9 +180,9 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 			(GLuint)args->a1,
 			(GLsizei)args->a2,
 			NULL,
-			(GLint*)&ret,
-			(GLenum*)args->a3,
-			(GLchar*)parg);
+			(GLint*)args->a4,
+			(GLenum*)args->a5,
+			(GLchar*)args->a6);
 		break;
 	case glfnGetActiveUniform:
 		glGetActiveUniform(
@@ -192,27 +190,28 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 			(GLuint)args->a1,
 			(GLsizei)args->a2,
 			NULL,
-			(GLint*)&ret,
-			(GLenum*)args->a3,
-			(GLchar*)parg);
+			(GLint*)args->a4,
+			(GLenum*)args->a5,
+			(GLchar*)args->a6);
 		break;
 	case glfnGetAttachedShaders:
-		glGetAttachedShaders((GLuint)args->a0, (GLsizei)args->a1, (GLsizei*)&ret, (GLuint*)parg);
+		glGetAttachedShaders((GLuint)args->a0, (GLsizei)args->a1, (GLsizei*)args->a2, (GLuint*)args->a3);
 		break;
 	case glfnGetAttribLocation:
 		ret = glGetAttribLocation((GLint)args->a0, (GLchar*)args->a1);
+		free((void*)args->a1);
 		break;
 	case glfnGetBooleanv:
-		glGetBooleanv((GLenum)args->a0, (GLboolean*)parg);
+		glGetBooleanv((GLenum)args->a0, (GLboolean*)args->a1);
 		break;
 	case glfnGetBufferParameteri:
 		glGetBufferParameteriv((GLenum)args->a0, (GLenum)args->a1, (GLint*)&ret);
 		break;
 	case glfnGetFloatv:
-		glGetFloatv((GLenum)args->a0, (GLfloat*)parg);
+		glGetFloatv((GLenum)args->a0, (GLfloat*)args->a1);
 		break;
 	case glfnGetIntegerv:
-		glGetIntegerv((GLenum)args->a0, (GLint*)parg);
+		glGetIntegerv((GLenum)args->a0, (GLint*)args->a1);
 		break;
 	case glfnGetError:
 		ret = glGetError();
@@ -224,7 +223,7 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glGetProgramiv((GLint)args->a0, (GLenum)args->a1, (GLint*)&ret);
 		break;
 	case glfnGetProgramInfoLog:
-		glGetProgramInfoLog((GLuint)args->a0, (GLsizei)args->a1, 0, (GLchar*)parg);
+		glGetProgramInfoLog((GLuint)args->a0, (GLsizei)args->a1, (GLsizei*)args->a2, (GLchar*)args->a3);
 		break;
 	case glfnGetRenderbufferParameteriv:
 		glGetRenderbufferParameteriv((GLenum)args->a0, (GLenum)args->a1, (GLint*)&ret);
@@ -233,37 +232,38 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glGetShaderiv((GLint)args->a0, (GLenum)args->a1, (GLint*)&ret);
 		break;
 	case glfnGetShaderInfoLog:
-		glGetShaderInfoLog((GLuint)args->a0, (GLsizei)args->a1, 0, (GLchar*)parg);
+		glGetShaderInfoLog((GLuint)args->a0, (GLsizei)args->a1, (GLsizei*)args->a2, (GLchar*)args->a3);
 		break;
 	case glfnGetShaderPrecisionFormat:
-		glGetShaderPrecisionFormat((GLenum)args->a0, (GLenum)args->a1, (GLint*)parg, &((GLint*)parg)[2]);
+		glGetShaderPrecisionFormat((GLenum)args->a0, (GLenum)args->a1, (GLint*)args->a2, (GLint*)args->a3);
 		break;
 	case glfnGetShaderSource:
-		glGetShaderSource((GLuint)args->a0, (GLsizei)args->a1, 0, (GLchar*)parg);
+		glGetShaderSource((GLuint)args->a0, (GLsizei)args->a1, (GLsizei*)args->a2, (GLchar*)args->a3);
 		break;
 	case glfnGetString:
 		ret = (uintptr_t)glGetString((GLenum)args->a0);
 		break;
 	case glfnGetTexParameterfv:
-		glGetTexParameterfv((GLenum)args->a0, (GLenum)args->a1, (GLfloat*)parg);
+		glGetTexParameterfv((GLenum)args->a0, (GLenum)args->a1, (GLfloat*)args->a2);
 		break;
 	case glfnGetTexParameteriv:
-		glGetTexParameteriv((GLenum)args->a0, (GLenum)args->a1, (GLint*)parg);
+		glGetTexParameteriv((GLenum)args->a0, (GLenum)args->a1, (GLint*)args->a2);
 		break;
 	case glfnGetUniformfv:
-		glGetUniformfv((GLuint)args->a0, (GLint)args->a1, (GLfloat*)parg);
+		glGetUniformfv((GLuint)args->a0, (GLint)args->a1, (GLfloat*)args->a2);
 		break;
 	case glfnGetUniformiv:
-		glGetUniformiv((GLuint)args->a0, (GLint)args->a1, (GLint*)parg);
+		glGetUniformiv((GLuint)args->a0, (GLint)args->a1, (GLint*)args->a2);
 		break;
 	case glfnGetUniformLocation:
 		ret = glGetUniformLocation((GLint)args->a0, (GLchar*)args->a1);
+		free((void*)args->a1);
 		break;
 	case glfnGetVertexAttribfv:
-		glGetVertexAttribfv((GLuint)args->a0, (GLenum)args->a1, (GLfloat*)parg);
+		glGetVertexAttribfv((GLuint)args->a0, (GLenum)args->a1, (GLfloat*)args->a2);
 		break;
 	case glfnGetVertexAttribiv:
-		glGetVertexAttribiv((GLuint)args->a0, (GLenum)args->a1, (GLint*)parg);
+		glGetVertexAttribiv((GLuint)args->a0, (GLenum)args->a1, (GLint*)args->a2);
 		break;
 	case glfnHint:
 		glHint((GLenum)args->a0, (GLenum)args->a1);
@@ -302,7 +302,7 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glPolygonOffset(*(GLfloat*)&args->a0, *(GLfloat*)&args->a1);
 		break;
 	case glfnReadPixels:
-		glReadPixels((GLint)args->a0, (GLint)args->a1, (GLsizei)args->a2, (GLsizei)args->a3, (GLenum)args->a4, (GLenum)args->a5, (void*)parg);
+		glReadPixels((GLint)args->a0, (GLint)args->a1, (GLsizei)args->a2, (GLsizei)args->a3, (GLenum)args->a4, (GLenum)args->a5, (void*)args->a6);
 		break;
 	case glfnReleaseShaderCompiler:
 		glReleaseShaderCompiler();
@@ -322,6 +322,8 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 #else
 		glShaderSource((GLuint)args->a0, (GLsizei)args->a1, (const GLchar **)args->a2, NULL);
 #endif
+		free(*(void**)args->a2);
+		free((void*)args->a2);
 		break;
 	case glfnStencilFunc:
 		glStencilFunc((GLenum)args->a0, (GLint)args->a1, (GLuint)args->a2);
@@ -351,7 +353,7 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 			0, // border
 			(GLenum)args->a5,
 			(GLenum)args->a6,
-			(const GLvoid*)parg);
+			(const GLvoid*)args->a7);
 		break;
 	case glfnTexSubImage2D:
 		glTexSubImage2D(
@@ -363,76 +365,76 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 			(GLsizei)args->a5,
 			(GLenum)args->a6,
 			(GLenum)args->a7,
-			(const GLvoid*)parg);
+			(const GLvoid*)args->a8);
 		break;
 	case glfnTexParameterf:
 		glTexParameterf((GLenum)args->a0, (GLenum)args->a1, *(GLfloat*)&args->a2);
 		break;
 	case glfnTexParameterfv:
-		glTexParameterfv((GLenum)args->a0, (GLenum)args->a1, (GLfloat*)parg);
+		glTexParameterfv((GLenum)args->a0, (GLenum)args->a1, (GLfloat*)args->a2);
 		break;
 	case glfnTexParameteri:
 		glTexParameteri((GLenum)args->a0, (GLenum)args->a1, (GLint)args->a2);
 		break;
 	case glfnTexParameteriv:
-		glTexParameteriv((GLenum)args->a0, (GLenum)args->a1, (GLint*)parg);
+		glTexParameteriv((GLenum)args->a0, (GLenum)args->a1, (GLint*)args->a2);
 		break;
 	case glfnUniform1f:
 		glUniform1f((GLint)args->a0, *(GLfloat*)&args->a1);
 		break;
 	case glfnUniform1fv:
-		glUniform1fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform1fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform1i:
 		glUniform1i((GLint)args->a0, (GLint)args->a1);
 		break;
 	case glfnUniform1iv:
-		glUniform1iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform1iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform2f:
 		glUniform2f((GLint)args->a0, *(GLfloat*)&args->a1, *(GLfloat*)&args->a2);
 		break;
 	case glfnUniform2fv:
-		glUniform2fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform2fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform2i:
 		glUniform2i((GLint)args->a0, (GLint)args->a1, (GLint)args->a2);
 		break;
 	case glfnUniform2iv:
-		glUniform2iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform2iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform3f:
 		glUniform3f((GLint)args->a0, *(GLfloat*)&args->a1, *(GLfloat*)&args->a2, *(GLfloat*)&args->a3);
 		break;
 	case glfnUniform3fv:
-		glUniform3fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform3fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform3i:
 		glUniform3i((GLint)args->a0, (GLint)args->a1, (GLint)args->a2, (GLint)args->a3);
 		break;
 	case glfnUniform3iv:
-		glUniform3iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform3iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform4f:
 		glUniform4f((GLint)args->a0, *(GLfloat*)&args->a1, *(GLfloat*)&args->a2, *(GLfloat*)&args->a3, *(GLfloat*)&args->a4);
 		break;
 	case glfnUniform4fv:
-		glUniform4fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform4fv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniform4i:
 		glUniform4i((GLint)args->a0, (GLint)args->a1, (GLint)args->a2, (GLint)args->a3, (GLint)args->a4);
 		break;
 	case glfnUniform4iv:
-		glUniform4iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)parg);
+		glUniform4iv((GLint)args->a0, (GLsizeiptr)args->a1, (GLvoid*)args->a2);
 		break;
 	case glfnUniformMatrix2fv:
-		glUniformMatrix2fv((GLint)args->a0, (GLsizeiptr)args->a1, 0, (GLvoid*)parg);
+		glUniformMatrix2fv((GLint)args->a0, (GLsizeiptr)args->a1, 0, (GLvoid*)args->a2);
 		break;
 	case glfnUniformMatrix3fv:
-		glUniformMatrix3fv((GLint)args->a0, (GLsizeiptr)args->a1, 0, (GLvoid*)parg);
+		glUniformMatrix3fv((GLint)args->a0, (GLsizeiptr)args->a1, 0, (GLvoid*)args->a2);
 		break;
 	case glfnUniformMatrix4fv:
-		glUniformMatrix4fv((GLint)args->a0, (GLsizeiptr)args->a1, 0, (GLvoid*)parg);
+		glUniformMatrix4fv((GLint)args->a0, (GLsizeiptr)args->a1, 0, (GLvoid*)args->a2);
 		break;
 	case glfnUseProgram:
 		glUseProgram((GLint)args->a0);
@@ -444,25 +446,25 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glVertexAttrib1f((GLint)args->a0, *(GLfloat*)&args->a1);
 		break;
 	case glfnVertexAttrib1fv:
-		glVertexAttrib1fv((GLint)args->a0, (GLfloat*)parg);
+		glVertexAttrib1fv((GLint)args->a0, (GLfloat*)args->a1);
 		break;
 	case glfnVertexAttrib2f:
 		glVertexAttrib2f((GLint)args->a0, *(GLfloat*)&args->a1, *(GLfloat*)&args->a2);
 		break;
 	case glfnVertexAttrib2fv:
-		glVertexAttrib2fv((GLint)args->a0, (GLfloat*)parg);
+		glVertexAttrib2fv((GLint)args->a0, (GLfloat*)args->a1);
 		break;
 	case glfnVertexAttrib3f:
 		glVertexAttrib3f((GLint)args->a0, *(GLfloat*)&args->a1, *(GLfloat*)&args->a2, *(GLfloat*)&args->a3);
 		break;
 	case glfnVertexAttrib3fv:
-		glVertexAttrib3fv((GLint)args->a0, (GLfloat*)parg);
+		glVertexAttrib3fv((GLint)args->a0, (GLfloat*)args->a1);
 		break;
 	case glfnVertexAttrib4f:
 		glVertexAttrib4f((GLint)args->a0, *(GLfloat*)&args->a1, *(GLfloat*)&args->a2, *(GLfloat*)&args->a3, *(GLfloat*)&args->a4);
 		break;
 	case glfnVertexAttrib4fv:
-		glVertexAttrib4fv((GLint)args->a0, (GLfloat*)parg);
+		glVertexAttrib4fv((GLint)args->a0, (GLfloat*)args->a1);
 		break;
 	case glfnVertexAttribPointer:
 		glVertexAttribPointer((GLuint)args->a0, (GLint)args->a1, (GLenum)args->a2, (GLboolean)args->a3, (GLsizei)args->a4, (const GLvoid*)args->a5);
@@ -471,5 +473,4 @@ uintptr_t processFn(struct fnargs* args, char* parg) {
 		glViewport((GLint)args->a0, (GLint)args->a1, (GLint)args->a2, (GLint)args->a3);
 		break;
 	}
-	return ret;
 }

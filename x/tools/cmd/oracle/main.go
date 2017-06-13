@@ -6,6 +6,10 @@
 // http://golang.org/s/oracle-design
 // http://golang.org/s/oracle-user-manual
 //
+// DEPRECATED: oracle has been superseded by guru;
+// see https://golang.org/s/using-guru for details.
+// This package will be deleted on October 1, 2016.
+//
 // Run with -help flag or help subcommand for usage information.
 //
 package main // import "golang.org/x/tools/cmd/oracle"
@@ -66,8 +70,10 @@ The mode argument determines the query to perform:
 	freevars  	show free variables of selection
 	implements	show 'implements' relation for selected type or method
 	peers     	show send/receive corresponding to selected channel op
+	pointsto	show variables to which the selected pointer may point
 	referrers 	show all refs to entity denoted by selected identifier
 	what		show basic information about the selected syntax node
+	whicherrs	show possible values of the selected error variable
 
 The user manual is available here:  http://golang.org/s/oracle-user-manual
 
@@ -77,8 +83,6 @@ Describe the syntax at offset 530 in this file (an import spec):
 % oracle -pos=src/golang.org/x/tools/cmd/oracle/main.go:#530 describe \
    golang.org/x/tools/cmd/oracle
 
-Print the callgraph of the trivial web-server in JSON format:
-% oracle -format=json callstack $GOROOT/src/net/http/triv.go
 ` + loader.FromArgsUsage
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")

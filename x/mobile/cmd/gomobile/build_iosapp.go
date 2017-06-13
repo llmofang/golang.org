@@ -60,10 +60,8 @@ func goIOSBuild(pkg *build.Package) (map[string]bool, error) {
 		}
 	}
 
-	ctx.BuildTags = append(ctx.BuildTags, "ios")
-
 	armPath := filepath.Join(tmpdir, "arm")
-	if err := goBuild(src, darwinArmEnv, "-o="+armPath); err != nil {
+	if err := goBuild(src, darwinArmEnv, "-tags=ios", "-o="+armPath); err != nil {
 		return nil, err
 	}
 	nmpkgs, err := extractPkgs(darwinArmNM, armPath)
@@ -72,7 +70,7 @@ func goIOSBuild(pkg *build.Package) (map[string]bool, error) {
 	}
 
 	arm64Path := filepath.Join(tmpdir, "arm64")
-	if err := goBuild(src, darwinArm64Env, "-o="+arm64Path); err != nil {
+	if err := goBuild(src, darwinArm64Env, "-tags=ios", "-o="+arm64Path); err != nil {
 		return nil, err
 	}
 
@@ -142,18 +140,10 @@ func iosCopyAssets(pkg *build.Package, xcodeProjDir string) error {
 		// skip walking through to deep copy.
 		return nil
 	}
-	// if assets is a symlink, follow the symlink.
-	srcAssets, err = filepath.EvalSymlinks(srcAssets)
-	if err != nil {
-		return err
-	}
+
 	return filepath.Walk(srcAssets, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
-		}
-		if name := filepath.Base(path); strings.HasPrefix(name, ".") {
-			// Do not include the hidden files.
-			return nil
 		}
 		if info.IsDir() {
 			return nil
@@ -338,6 +328,50 @@ const projPbxproj = `// !$*UTF8*$!
 /* End PBXResourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+    254BB85F1B1FD08900C56DE9 /* Debug */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ALWAYS_SEARCH_USER_PATHS = NO;
+        CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+        CLANG_CXX_LIBRARY = "libc++";
+        CLANG_ENABLE_MODULES = YES;
+        CLANG_ENABLE_OBJC_ARC = YES;
+        CLANG_WARN_BOOL_CONVERSION = YES;
+        CLANG_WARN_CONSTANT_CONVERSION = YES;
+        CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+        CLANG_WARN_EMPTY_BODY = YES;
+        CLANG_WARN_ENUM_CONVERSION = YES;
+        CLANG_WARN_INT_CONVERSION = YES;
+        CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+        CLANG_WARN_UNREACHABLE_CODE = YES;
+        CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+        "CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+        COPY_PHASE_STRIP = NO;
+        DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+        ENABLE_STRICT_OBJC_MSGSEND = YES;
+        GCC_C_LANGUAGE_STANDARD = gnu99;
+        GCC_DYNAMIC_NO_PIC = NO;
+        GCC_NO_COMMON_BLOCKS = YES;
+        GCC_OPTIMIZATION_LEVEL = 0;
+        GCC_PREPROCESSOR_DEFINITIONS = (
+          "DEBUG=1",
+          "$(inherited)",
+        );
+        GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+        GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+        GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+        GCC_WARN_UNDECLARED_SELECTOR = YES;
+        GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+        GCC_WARN_UNUSED_FUNCTION = YES;
+        GCC_WARN_UNUSED_VARIABLE = YES;
+        IPHONEOS_DEPLOYMENT_TARGET = 8.3;
+        MTL_ENABLE_DEBUG_INFO = YES;
+        ONLY_ACTIVE_ARCH = YES;
+        SDKROOT = iphoneos;
+        TARGETED_DEVICE_FAMILY = "1,2";
+      };
+      name = Debug;
+    };
     254BB8601B1FD08900C56DE9 /* Release */ = {
       isa = XCBuildConfiguration;
       buildSettings = {
@@ -376,6 +410,16 @@ const projPbxproj = `// !$*UTF8*$!
       };
       name = Release;
     };
+    254BB8621B1FD08900C56DE9 /* Debug */ = {
+      isa = XCBuildConfiguration;
+      buildSettings = {
+        ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+        INFOPLIST_FILE = main/Info.plist;
+        LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+        PRODUCT_NAME = "$(TARGET_NAME)";
+      };
+      name = Debug;
+    };
     254BB8631B1FD08900C56DE9 /* Release */ = {
       isa = XCBuildConfiguration;
       buildSettings = {
@@ -392,6 +436,7 @@ const projPbxproj = `// !$*UTF8*$!
     254BB8391B1FD08900C56DE9 /* Build configuration list for PBXProject "main" */ = {
       isa = XCConfigurationList;
       buildConfigurations = (
+        254BB85F1B1FD08900C56DE9 /* Debug */,
         254BB8601B1FD08900C56DE9 /* Release */,
       );
       defaultConfigurationIsVisible = 0;
@@ -400,6 +445,7 @@ const projPbxproj = `// !$*UTF8*$!
     254BB8611B1FD08900C56DE9 /* Build configuration list for PBXNativeTarget "main" */ = {
       isa = XCConfigurationList;
       buildConfigurations = (
+        254BB8621B1FD08900C56DE9 /* Debug */,
         254BB8631B1FD08900C56DE9 /* Release */,
       );
       defaultConfigurationIsVisible = 0;

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// +build darwin linux windows
+// +build darwin linux
 
 // An app that paints green if golang.org is reachable when the app first
 // starts, or red otherwise.
@@ -43,9 +43,9 @@ import (
 	"net/http"
 
 	"golang.org/x/mobile/app"
-	"golang.org/x/mobile/event/lifecycle"
 	"golang.org/x/mobile/event/paint"
 	"golang.org/x/mobile/event/size"
+	"golang.org/x/mobile/exp/app/debug"
 	"golang.org/x/mobile/gl"
 )
 
@@ -54,27 +54,14 @@ func main() {
 	go checkNetwork()
 
 	app.Main(func(a app.App) {
-		var glctx gl.Context
-		det, sz := determined, size.Event{}
-		for {
-			select {
-			case <-det:
-				a.Send(paint.Event{})
-				det = nil
-
-			case e := <-a.Events():
-				switch e := a.Filter(e).(type) {
-				case lifecycle.Event:
-					glctx, _ = e.DrawContext.(gl.Context)
-				case size.Event:
-					sz = e
-				case paint.Event:
-					if glctx == nil {
-						continue
-					}
-					onDraw(glctx, sz)
-					a.Publish()
-				}
+		var sz size.Event
+		for e := range a.Events() {
+			switch e := app.Filter(e).(type) {
+			case size.Event:
+				sz = e
+			case paint.Event:
+				onDraw(sz)
+				a.EndPaint(e)
 			}
 		}
 	})
@@ -95,16 +82,18 @@ func checkNetwork() {
 	ok = true
 }
 
-func onDraw(glctx gl.Context, sz size.Event) {
+func onDraw(sz size.Event) {
 	select {
 	case <-determined:
 		if ok {
-			glctx.ClearColor(0, 1, 0, 1)
+			gl.ClearColor(0, 1, 0, 1)
 		} else {
-			glctx.ClearColor(1, 0, 0, 1)
+			gl.ClearColor(1, 0, 0, 1)
 		}
 	default:
-		glctx.ClearColor(0, 0, 0, 1)
+		gl.ClearColor(0, 0, 0, 1)
 	}
-	glctx.Clear(gl.COLOR_BUFFER_BIT)
+	gl.Clear(gl.COLOR_BUFFER_BIT)
+
+	debug.DrawFPS(sz)
 }

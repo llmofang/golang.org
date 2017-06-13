@@ -12,15 +12,15 @@
 
 @interface GoStructsS : NSObject {
 }
-@property(strong, readonly) id _ref;
+@property(strong, readonly) id ref;
 
 - (id)initWithRef:(id)ref;
-- (double)x;
+- (double)X;
 - (void)setX:(double)v;
-- (double)y;
+- (double)Y;
 - (void)setY:(double)v;
-- (BOOL)identity:(GoStructsS**)ret0_ error:(NSError**)error;
-- (double)sum;
+- (BOOL)Identity:(GoStructsS**)ret0_ error:(NSError**)error;
+- (double)Sum;
 @end
 
 FOUNDATION_EXPORT GoStructsS* GoStructsIdentity(GoStructsS* s);

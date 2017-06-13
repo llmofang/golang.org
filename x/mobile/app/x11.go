@@ -32,49 +32,43 @@ import (
 	"golang.org/x/mobile/event/size"
 	"golang.org/x/mobile/event/touch"
 	"golang.org/x/mobile/geom"
+	"golang.org/x/mobile/gl"
 )
 
 func init() {
-	theApp.registerGLViewportFilter()
+	registerGLViewportFilter()
 }
 
 func main(f func(App)) {
 	runtime.LockOSThread()
-
-	workAvailable := theApp.worker.WorkAvailable()
-
 	C.createWindow()
 
 	// TODO: send lifecycle events when e.g. the X11 window is iconified or moved off-screen.
-	theApp.sendLifecycle(lifecycle.StageFocused)
-
-	// TODO: translate X11 expose events to shiny paint events, instead of
-	// sending this synthetic paint event as a hack.
-	theApp.eventsIn <- paint.Event{}
+	sendLifecycle(lifecycle.StageFocused)
 
 	donec := make(chan struct{})
 	go func() {
-		f(theApp)
+		f(app{})
 		close(donec)
 	}()
 
 	// TODO: can we get the actual vsync signal?
 	ticker := time.NewTicker(time.Second / 60)
 	defer ticker.Stop()
-	var tc <-chan time.Time
+	tc := ticker.C
 
 	for {
 		select {
 		case <-donec:
 			return
-		case <-workAvailable:
-			theApp.worker.DoWork()
-		case <-theApp.publish:
+		case <-gl.WorkAvailable:
+			gl.DoWork()
+		case <-endPaint:
 			C.swapBuffers()
 			tc = ticker.C
 		case <-tc:
 			tc = nil
-			theApp.publishResult <- PublishResult{}
+			eventsIn <- paint.Event{}
 		}
 		C.processEvents()
 	}
@@ -85,7 +79,7 @@ func onResize(w, h int) {
 	// TODO(nigeltao): don't assume 72 DPI. DisplayWidth and DisplayWidthMM
 	// is probably the best place to start looking.
 	pixelsPerPt := float32(1)
-	theApp.eventsIn <- size.Event{
+	eventsIn <- size.Event{
 		WidthPx:     w,
 		HeightPx:    h,
 		WidthPt:     geom.Pt(w),
@@ -95,7 +89,7 @@ func onResize(w, h int) {
 }
 
 func sendTouch(t touch.Type, x, y float32) {
-	theApp.eventsIn <- touch.Event{
+	eventsIn <- touch.Event{
 		X:        x,
 		Y:        y,
 		Sequence: 0, // TODO: button??
@@ -120,6 +114,6 @@ func onStop() {
 		return
 	}
 	stopped = true
-	theApp.sendLifecycle(lifecycle.StageDead)
-	theApp.eventsIn <- stopPumping{}
+	sendLifecycle(lifecycle.StageDead)
+	eventsIn <- stopPumping{}
 }

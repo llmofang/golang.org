@@ -90,15 +90,6 @@ func dirHasPrefix(dir, prefix string) bool {
 	return len(dir) >= len(prefix) && strings.EqualFold(dir[:len(prefix)], prefix)
 }
 
-// StripVendor removes the "vendor" segment and all preceding ones
-// from a slash-segmented path.  (See go/build.AllowVendor.)
-func StripVendor(path string) string {
-	if i := strings.LastIndex(path, "/vendor/"); i >= 0 {
-		return path[i+len("/vendor/"):]
-	}
-	return strings.TrimPrefix(path, "vendor/")
-}
-
 // -- Effective methods of file system interface -------------------------
 
 // (go/build.Context defines these as methods, but does not export them.)
@@ -173,4 +164,21 @@ func SplitPathList(ctxt *build.Context, s string) []string {
 		return ctxt.SplitPathList(s)
 	}
 	return filepath.SplitList(s)
+}
+
+// sameFile returns true if x and y have the same basename and denote
+// the same file.
+//
+func sameFile(x, y string) bool {
+	if path.Clean(x) == path.Clean(y) {
+		return true
+	}
+	if filepath.Base(x) == filepath.Base(y) { // (optimisation)
+		if xi, err := os.Stat(x); err == nil {
+			if yi, err := os.Stat(y); err == nil {
+				return os.SameFile(xi, yi)
+			}
+		}
+	}
+	return false
 }

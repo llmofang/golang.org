@@ -27,25 +27,25 @@ func runVersion(cmd *command) (err error) {
 	// source code in GOPATH. If they don't match, currently there is no
 	// way to reliably identify the revision number this binary was built
 	// against.
-	version, err := func() (string, error) {
+	version := func() string {
 		bin, err := exec.LookPath(os.Args[0])
 		if err != nil {
-			return "", err
+			return ""
 		}
 		bindir := filepath.Dir(bin)
 		cmd := exec.Command("go", "install", "-x", "-n", "golang.org/x/mobile/cmd/gomobile")
 		cmd.Env = append(os.Environ(), "GOBIN="+bindir)
 		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("cannot test gomobile binary: %v, %s", err, out)
+		if err != nil || len(out) != 0 {
+			return ""
 		}
-		if len(out) != 0 {
-			return "", fmt.Errorf("binary is out of date, re-install it")
+		if rev, err := mobileRepoRevision(); err == nil {
+			return rev
 		}
-		return mobileRepoRevision()
+		return ""
 	}()
-	if err != nil {
-		fmt.Printf("gomobile version unknown: %v\n", err)
+	if version == "" {
+		fmt.Println("gomobile version unknown")
 		return nil
 	}
 
@@ -65,7 +65,7 @@ func runVersion(cmd *command) (err error) {
 func mobileRepoRevision() (rev string, err error) {
 	b, err := exec.Command("go", "list", "-f", "{{.Dir}}", "golang.org/x/mobile/app").CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("mobile repo not found: %v, %s", err, b)
+		return "", fmt.Errorf("mobile repo not found: %v", err)
 	}
 
 	repo := filepath.Dir(string(b))
@@ -74,7 +74,7 @@ func mobileRepoRevision() (rev string, err error) {
 	}
 	revision, err := exec.Command("git", "log", "-n", "1", "--format=format: +%h %cd", "HEAD").CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("mobile repo git log failed: %v, %s", err, revision)
+		return "", err
 	}
 	return string(bytes.Trim(revision, " \t\r\n")), nil
 }

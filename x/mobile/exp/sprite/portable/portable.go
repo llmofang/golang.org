@@ -51,7 +51,7 @@ func (t *texture) Upload(r image.Rectangle, src image.Image) {
 	draw.Draw(t.m, r, src, src.Bounds().Min, draw.Src)
 }
 
-func (t *texture) Release() {}
+func (t *texture) Unload() { panic("TODO") }
 
 type engine struct {
 	dst           *image.RGBA
@@ -148,8 +148,6 @@ func (e *engine) render(n *sprite.Node, t clock.Time) {
 	// Pop absTransforms.
 	e.absTransforms = e.absTransforms[:len(e.absTransforms)-1]
 }
-
-func (e *engine) Release() {}
 
 // affine draws each pixel of dst using bilinear interpolation of the
 // affine-transformed position in src. This is equivalent to:

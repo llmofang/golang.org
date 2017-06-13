@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -104,6 +105,7 @@ func init() {
 		"runtime.Gosched":                  ext۰runtime۰Gosched,
 		"runtime.init":                     ext۰runtime۰init,
 		"runtime.NumCPU":                   ext۰runtime۰NumCPU,
+		"runtime.NumGoroutine":             ext۰runtime۰NumGoroutine,
 		"runtime.ReadMemStats":             ext۰runtime۰ReadMemStats,
 		"runtime.SetFinalizer":             ext۰runtime۰SetFinalizer,
 		"(*runtime.Func).Entry":            ext۰runtime۰Func۰Entry,
@@ -116,6 +118,7 @@ func init() {
 		"sync.runtime_Semacquire":          ext۰sync۰runtime_Semacquire,
 		"sync.runtime_Semrelease":          ext۰sync۰runtime_Semrelease,
 		"sync.runtime_Syncsemcheck":        ext۰sync۰runtime_Syncsemcheck,
+		"sync.runtime_notifyListCheck":     ext۰sync۰runtime_notifyListCheck,
 		"sync.runtime_registerPoolCleanup": ext۰sync۰runtime_registerPoolCleanup,
 		"sync/atomic.AddInt32":             ext۰atomic۰AddInt32,
 		"sync/atomic.AddUint32":            ext۰atomic۰AddUint32,
@@ -333,15 +336,6 @@ func ext۰strings۰Index(fr *frame, args []value) value {
 	return strings.Index(args[0].(string), args[1].(string))
 }
 
-func ext۰sync۰runtime_Syncsemcheck(fr *frame, args []value) value {
-	// TODO(adonovan): fix: implement.
-	return nil
-}
-
-func ext۰sync۰runtime_registerPoolCleanup(fr *frame, args []value) value {
-	return nil
-}
-
 func ext۰sync۰runtime_Semacquire(fr *frame, args []value) value {
 	// TODO(adonovan): fix: implement.
 	return nil
@@ -350,6 +344,19 @@ func ext۰sync۰runtime_Semacquire(fr *frame, args []value) value {
 func ext۰sync۰runtime_Semrelease(fr *frame, args []value) value {
 	// TODO(adonovan): fix: implement.
 	return nil
+}
+
+func ext۰sync۰runtime_Syncsemcheck(fr *frame, args []value) value {
+	// TODO(adonovan): fix: implement.
+	return nil
+}
+
+func ext۰sync۰runtime_notifyListCheck(fr *frame, args []value) value {
+	return nil // no-op
+}
+
+func ext۰sync۰runtime_registerPoolCleanup(fr *frame, args []value) value {
+	return nil // no-op
 }
 
 func ext۰runtime۰GOMAXPROCS(fr *frame, args []value) value {
@@ -380,6 +387,10 @@ func ext۰runtime۰init(fr *frame, args []value) value {
 
 func ext۰runtime۰NumCPU(fr *frame, args []value) value {
 	return runtime.NumCPU()
+}
+
+func ext۰runtime۰NumGoroutine(fr *frame, args []value) value {
+	return int(atomic.LoadInt32(&fr.i.goroutines))
 }
 
 func ext۰runtime۰ReadMemStats(fr *frame, args []value) value {

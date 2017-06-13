@@ -2,7 +2,7 @@
 // Use of this source code is governed by the Apache 2.0
 // license that can be found in the LICENSE file.
 
-// Command tipgodoc is the beginning of the new tip.golang.org server,
+// Command tip is the tip.golang.org server,
 // serving the latest HEAD straight from the Git oven.
 package main
 
@@ -27,7 +27,7 @@ import (
 const (
 	repoURL      = "https://go.googlesource.com/"
 	metaURL      = "https://go.googlesource.com/?b=master&format=JSON"
-	startTimeout = 5 * time.Minute
+	startTimeout = 10 * time.Minute
 )
 
 func main() {
@@ -44,8 +44,10 @@ func main() {
 
 	p := &Proxy{builder: b}
 	go p.run()
-	http.Handle("/", p)
+	http.Handle("/", httpsOnlyHandler{p})
 	http.HandleFunc("/_ah/health", p.serveHealthCheck)
+
+	log.Print("Starting up")
 
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		p.stop()
@@ -90,14 +92,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, s, http.StatusInternalServerError)
 		return
 	}
-	if r.URL.Path == "/_ah/health" {
-		if err := p.builder.HealthCheck(p.hostport); err != nil {
-			http.Error(w, "Health check failde: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		fmt.Fprintln(w, "OK")
-		return
-	}
 	proxy.ServeHTTP(w, r)
 }
 
@@ -110,8 +104,17 @@ func (p *Proxy) serveStatus(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) serveHealthCheck(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// NOTE: Status 502, 503, 504 are the only status codes that signify an unhealthy app.
+	// So long as this handler returns one of those codes, this instance will not be sent any requests.
 	if p.proxy == nil {
-		http.Error(w, "not ready", 500)
+		log.Printf("Health check: not ready")
+		http.Error(w, "Not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := p.builder.HealthCheck(p.hostport); err != nil {
+		log.Printf("Health check failed: %v", err)
+		http.Error(w, "Health check failed", http.StatusServiceUnavailable)
 		return
 	}
 	io.WriteString(w, "ok")
@@ -168,7 +171,9 @@ func (p *Proxy) poll() {
 		hostport = "localhost:8082"
 	}
 	cmd, err := p.builder.Init(dir, hostport, heads)
-	if err == nil {
+	if err != nil {
+		err = fmt.Errorf("builder.Init: %v", err)
+	} else {
 		go func() {
 			// TODO(adg,bradfitz): be smarter about dead processes
 			if err := cmd.Wait(); err != nil {
@@ -176,6 +181,10 @@ func (p *Proxy) poll() {
 			}
 		}()
 		err = waitReady(p.builder, hostport)
+		if err != nil {
+			cmd.Process.Kill()
+			err = fmt.Errorf("waitReady: %v", err)
+		}
 	}
 
 	p.mu.Lock()
@@ -188,6 +197,7 @@ func (p *Proxy) poll() {
 
 	u, err := url.Parse(fmt.Sprintf("http://%v/", hostport))
 	if err != nil {
+		err = fmt.Errorf("parsing hostport: %v", err)
 		log.Println(err)
 		p.err = err
 		return
@@ -228,29 +238,32 @@ func checkout(repo, hash, path string) error {
 	// Clone git repo if it doesn't exist.
 	if _, err := os.Stat(filepath.Join(path, ".git")); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return err
+			return fmt.Errorf("mkdir: %v", err)
 		}
 		if err := runErr(exec.Command("git", "clone", repo, path)); err != nil {
-			return err
+			return fmt.Errorf("clone: %v", err)
 		}
 	} else if err != nil {
-		return err
+		return fmt.Errorf("stat .git: %v", err)
 	}
 
 	// Pull down changes and update to hash.
 	cmd := exec.Command("git", "fetch")
 	cmd.Dir = path
 	if err := runErr(cmd); err != nil {
-		return err
+		return fmt.Errorf("fetch: %v", err)
 	}
 	cmd = exec.Command("git", "reset", "--hard", hash)
 	cmd.Dir = path
 	if err := runErr(cmd); err != nil {
-		return err
+		return fmt.Errorf("reset: %v", err)
 	}
 	cmd = exec.Command("git", "clean", "-d", "-f", "-x")
 	cmd.Dir = path
-	return runErr(cmd)
+	if err := runErr(cmd); err != nil {
+		return fmt.Errorf("clean: %v", err)
+	}
+	return nil
 }
 
 // gerritMetaMap returns the map from repo name (e.g. "go") to its
@@ -309,4 +322,24 @@ func getOK(url string) (body []byte, err error) {
 		return nil, errors.New(res.Status)
 	}
 	return body, nil
+}
+
+// httpsOnlyHandler redirects requests to "http://example.com/foo?bar"
+// to "https://example.com/foo?bar"
+type httpsOnlyHandler struct {
+	h http.Handler
+}
+
+func (h httpsOnlyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Appengine-Https") == "off" {
+		r.URL.Scheme = "https"
+		r.URL.Host = r.Host
+		http.Redirect(w, r, r.URL.String(), http.StatusFound)
+		return
+	}
+	if r.Header.Get("X-Appengine-Https") == "on" {
+		// Only set this header when we're actually in production.
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; preload")
+	}
+	h.h.ServeHTTP(w, r)
 }

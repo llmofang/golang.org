@@ -7,6 +7,7 @@ package vcs
 import (
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -25,20 +26,6 @@ func TestRepoRootForImportPath(t *testing.T) {
 		path string
 		want *RepoRoot
 	}{
-		{
-			"code.google.com/p/go",
-			&RepoRoot{
-				VCS:  vcsHg,
-				Repo: "https://code.google.com/p/go",
-			},
-		},
-		{
-			"code.google.com/r/go",
-			&RepoRoot{
-				VCS:  vcsHg,
-				Repo: "https://code.google.com/r/go",
-			},
-		},
 		{
 			"github.com/golang/groupcache",
 			&RepoRoot{
@@ -61,34 +48,34 @@ func TestRepoRootForImportPath(t *testing.T) {
 	}
 }
 
-// Test that FromDir correctly inspects a given directory and returns the right VCS.
+// Test that FromDir correctly inspects a given directory and returns the right VCS and root.
 func TestFromDir(t *testing.T) {
-	type testStruct struct {
-		path string
-		want *Cmd
-	}
-
-	tests := make([]testStruct, len(vcsList))
 	tempDir, err := ioutil.TempDir("", "vcstest")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	for i, vcs := range vcsList {
-		tests[i] = testStruct{
-			filepath.Join(tempDir, vcs.Name, "."+vcs.Cmd),
-			vcs,
+	for _, vcs := range vcsList {
+		dir := filepath.Join(tempDir, "example.com", vcs.Name, "."+vcs.Cmd)
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
 
-	for _, test := range tests {
-		os.MkdirAll(test.path, 0755)
-		got, _, _ := FromDir(test.path, tempDir)
-		if got.Name != test.want.Name {
-			t.Errorf("FromDir(%q, %q) = %s, want %s", test.path, tempDir, got, test.want)
+		want := RepoRoot{
+			VCS:  vcs,
+			Root: path.Join("example.com", vcs.Name),
 		}
-		os.RemoveAll(test.path)
+		var got RepoRoot
+		got.VCS, got.Root, err = FromDir(dir, tempDir)
+		if err != nil {
+			t.Errorf("FromDir(%q, %q): %v", dir, tempDir, err)
+			continue
+		}
+		if got.VCS.Name != want.VCS.Name || got.Root != want.Root {
+			t.Errorf("FromDir(%q, %q) = VCS(%s) Root(%s), want VCS(%s) Root(%s)", dir, tempDir, got.VCS, got.Root, want.VCS, want.Root)
+		}
 	}
 }
 

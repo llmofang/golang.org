@@ -32,6 +32,9 @@ func TestStdlib(t *testing.T) {
 	if runtime.GOOS == "android" {
 		t.Skipf("incomplete std lib on %s", runtime.GOOS)
 	}
+	if testing.Short() {
+		t.Skip("skipping in short mode; uses tons of memory (golang.org/issue/14113)")
+	}
 
 	runtime.GC()
 	t0 := time.Now()
@@ -118,6 +121,9 @@ func TestStdlib(t *testing.T) {
 }
 
 func TestCgoOption(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode; uses tons of memory (golang.org/issue/14113)")
+	}
 	switch runtime.GOOS {
 	// On these systems, the net and os/user packages don't use cgo
 	// or the std library is incomplete (Android).
@@ -146,7 +152,7 @@ func TestCgoOption(t *testing.T) {
 		pkg, name, genericFile string
 	}{
 		{"net", "cgoLookupHost", "cgo_stub.go"},
-		{"os/user", "lookupId", "lookup_stubs.go"},
+		{"os/user", "current", "lookup_stubs.go"},
 	} {
 		ctxt := build.Default
 		for _, ctxt.CgoEnabled = range []bool{false, true} {

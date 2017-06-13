@@ -4,6 +4,7 @@ last-change
 *.app
 *.framework
 *.aar
+*.xcodeproj
 *.iml
 .idea
 .gradle
